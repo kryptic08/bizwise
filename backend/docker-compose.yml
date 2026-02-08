@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  receipt-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - API_KEY=dev-secret-key
+      - ENVIRONMENT=development
+      - OCR_ENGINE=tesseract
+      - USE_NLP_MODEL=true
+      - LOG_LEVEL=INFO
+    volumes:
+      - .:/app
+    restart: unless-stopped
