@@ -7,8 +7,8 @@
 
 // API Configuration
 const RECEIPT_API_URL =
-  process.env.EXPO_PUBLIC_RECEIPT_API_URL || "http://localhost:8000";
-const RECEIPT_API_KEY = process.env.EXPO_PUBLIC_RECEIPT_API_KEY || "";
+  process.env.EXPO_PUBLIC_RECEIPT_API_URL || "https://bizwise-api.onrender.com";
+const RECEIPT_API_KEY = process.env.EXPO_PUBLIC_RECEIPT_API_KEY || "bizwise-secret-2026-api-end";
 
 export interface LineItem {
   name: string;

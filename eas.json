@@ -19,7 +19,9 @@
       "env": {
         "EXPO_PUBLIC_CONVEX_URL": "https://tidy-pheasant-795.convex.cloud",
         "EXPO_PUBLIC_OCR_API_KEY": "K87899142388957",
-        "EXPO_PUBLIC_GEMINI_API_KEY": "AIzaSyAmrPqX4agtpgk38X2lDgUgtT91B1XPW9o"
+        "EXPO_PUBLIC_GEMINI_API_KEY": "AIzaSyAmrPqX4agtpgk38X2lDgUgtT91B1XPW9o",
+        "EXPO_PUBLIC_RECEIPT_API_URL": "https://bizwise-api.onrender.com",
+        "EXPO_PUBLIC_RECEIPT_API_KEY": "bizwise-secret-2026-api-end"
       }
     }
   },

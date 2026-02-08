@@ -27,6 +27,10 @@ import {
 } from "react-native";
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
+import {
+  processReceiptWithAPI,
+  mapReceiptToExpenseItems,
+} from "../utils/receiptAPI";
 
 const COLORS = {
   primaryBlue: "#3b6ea5",
@@ -246,23 +250,45 @@ export default function AddExpenseScreen() {
       console.log("Compressing image...");
       const compressedImage = await ImageManipulator.manipulateAsync(
         imageUri,
-        [{ resize: { width: 1200 } }], // Resize to max 1200px width
+        [{ resize: { width: 1200 } }],
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
       );
       console.log("Compressed image URI:", compressedImage.uri);
 
-      // Convert compressed image to base64 for Optiic API
+      // ── PRIMARY: BizWise Receipt API (self-hosted on Render) ──
+      try {
+        console.log("🚀 Trying BizWise Receipt API (primary)...");
+        const apiResult = await processReceiptWithAPI(compressedImage.uri);
+
+        if (apiResult.success && apiResult.data) {
+          console.log("✅ BizWise API succeeded");
+          setOcrText(apiResult.data.raw_text || "");
+
+          const mapped = mapReceiptToExpenseItems(apiResult.data);
+          if (mapped.length > 0) {
+            setExpenses(mapped);
+            setTimeout(() => closeOCRView(), 500);
+            Alert.alert(
+              "Receipt Processed",
+              `Found ${mapped.length} item(s) (confidence: ${(apiResult.data.confidence_score * 100).toFixed(0)}%). Review and adjust below.`,
+              [{ text: "OK" }],
+            );
+            return; // Done – skip fallback
+          }
+          // API returned no items – fall through to backup
+          console.log("⚠️ BizWise API returned 0 items, trying backup...");
+        }
+      } catch (primaryError) {
+        console.warn("⚠️ BizWise API failed, falling back to OCR.space + Gemini:", (primaryError as Error).message);
+      }
+
+      // ── BACKUP: OCR.space → Gemini AI ──
+      console.log("🔄 Using backup: OCR.space + Gemini AI...");
       const base64Image = await FileSystem.readAsStringAsync(
         compressedImage.uri,
-        {
-          encoding: "base64",
-        },
+        { encoding: "base64" },
       );
 
-      console.log("Base64 image length:", base64Image?.length);
-      console.log("Starting OCR.space API...");
-
-      // Create FormData for OCR.space API
       const formData = new FormData();
       formData.append("apikey", OCR_API_KEY);
       formData.append("base64Image", `data:image/jpeg;base64,${base64Image}`);
@@ -270,28 +296,19 @@ export default function AddExpenseScreen() {
       formData.append("isOverlayRequired", "false");
       formData.append("detectOrientation", "true");
       formData.append("scale", "true");
-      formData.append("OCREngine", "2"); // Engine 2 is better for receipts
+      formData.append("OCREngine", "2");
 
-      console.log("Making OCR.space API request...");
       const response = await fetch(OCR_API_URL, {
         method: "POST",
         body: formData,
       });
 
-      console.log("OCR.space API response status:", response.status);
-
       if (!response.ok) {
         const errorText = await response.text();
-        console.log("OCR.space API error response:", errorText);
-        throw new Error(
-          `OCR.space API error: ${response.status} - ${errorText}`,
-        );
+        throw new Error(`OCR.space API error: ${response.status} - ${errorText}`);
       }
 
       const result = await response.json();
-      console.log("OCR.space API result:", JSON.stringify(result, null, 2));
-
-      // Extract text from OCR.space response
       let extractedText = "";
       if (
         result.ParsedResults &&
@@ -299,27 +316,20 @@ export default function AddExpenseScreen() {
         result.ParsedResults[0].ParsedText
       ) {
         extractedText = result.ParsedResults[0].ParsedText;
-        console.log("Successfully extracted text from OCR.space API");
       } else if (result.ErrorMessage && result.ErrorMessage.length > 0) {
         throw new Error(`OCR.space error: ${result.ErrorMessage[0]}`);
       } else if (result.IsErroredOnProcessing) {
         throw new Error("OCR.space processing error");
       } else {
-        console.log("No text found in OCR.space API response");
         throw new Error("No text found in the image");
       }
 
-      console.log("Extracted text:", extractedText);
       setOcrText(extractedText);
-
-      // Use Gemini AI for intelligent parsing
       await parseReceiptWithAI(extractedText);
     } catch (error) {
-      console.error("OCR Error details:", error);
-      console.error("Error message:", (error as Error).message);
+      console.error("All OCR methods failed:", (error as Error).message);
 
-      // Fallback to mock data if API fails
-      console.log("Falling back to mock OCR data...");
+      // Last resort – demo/mock data
       const mockText = await simulateAdvancedOCR();
       setOcrText(mockText);
       await parseReceiptWithAI(mockText);
