@@ -65,30 +65,12 @@ _NOISE = re.compile(
 
 
 class NLPExtractor:
-    """Extract structured data from OCR text."""
+    """Extract structured data from OCR text using regex heuristics."""
 
     def __init__(self, use_model: bool = False):
-        self.use_model = use_model
+        # BERT NER disabled — too heavy for 512 MB free tier
+        self.use_model = False
         self.model = None
-        if use_model:
-            self._init_model()
-
-    # ---------------------------------------------------------------- #
-    #  Optional BERT NER
-    # ---------------------------------------------------------------- #
-    def _init_model(self):
-        try:
-            from transformers import pipeline
-
-            self.model = pipeline(
-                "ner",
-                model="dslim/bert-base-NER",
-                aggregation_strategy="simple",
-            )
-            logger.info("BERT NER model loaded")
-        except Exception as e:
-            logger.warning(f"BERT not available, regex only: {e}")
-            self.use_model = False
 
     # ---------------------------------------------------------------- #
     #  Public API
@@ -140,26 +122,6 @@ class NLPExtractor:
             alpha_ratio = sum(c.isalpha() or c == " " for c in clean) / len(clean)
             if alpha_ratio > 0.70 and not _NOISE.search(clean):
                 return self._clean_merchant(clean)
-
-        # Strategy 3 – BERT NER (ORG entity) as fallback
-        if self.use_model and self.model:
-            try:
-                header = " | ".join(lines[:4])  # use separator to prevent merging
-                ents = self.model(header)
-                orgs = [
-                    e["word"].strip()
-                    for e in ents
-                    if e["entity_group"] == "ORG"
-                    and e["score"] > 0.7
-                    and len(e["word"].strip()) > 2
-                    and not e["word"].startswith("##")
-                ]
-                if orgs:
-                    best = max(orgs, key=len)
-                    if 3 <= len(best) <= 60:
-                        return best
-            except Exception:
-                pass
 
         # Last resort – first non-trivial line
         for line in lines[:3]:

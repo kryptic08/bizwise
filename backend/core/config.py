@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     
     # Model Configuration
-    OCR_ENGINE: str = "tesseract"  # tesseract or easyocr
-    USE_NLP_MODEL: bool = True
+    OCR_ENGINE: str = "tesseract"
+    USE_NLP_MODEL: bool = False  # BERT NER disabled – too heavy for 512 MB free tier
     CONFIDENCE_THRESHOLD: float = 0.7
     
     # Server Configuration

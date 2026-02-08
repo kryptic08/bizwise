@@ -10,15 +10,8 @@ Pillow>=10.2.0
 opencv-python-headless>=4.9.0
 numpy>=1.26.0,<2.0
 
-# OCR (Free options)
+# OCR – Tesseract only (EasyOCR needs PyTorch = too heavy for 512 MB)
 pytesseract>=0.3.10
-easyocr>=1.7.0
-
-# NLP & ML (CPU-only to save space)
---extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.1.0
-transformers>=4.37.0
-sentencepiece>=0.1.99
 
 # Text Processing
 python-dateutil>=2.8.2

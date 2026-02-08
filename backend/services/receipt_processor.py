@@ -91,8 +91,6 @@ class ReceiptProcessor:
             "preprocessor": "OpenCV (multi-strategy)",
             "ocr_available": {
                 "tesseract": self.ocr_service.tesseract_available,
-                "easyocr": self.ocr_service.easyocr_reader is not None,
             },
-            "nlp_model_enabled": self.nlp_extractor.use_model,
-            "nlp_model_loaded": self.nlp_extractor.model is not None,
+            "nlp_engine": "regex-heuristic",
         }
