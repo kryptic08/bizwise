@@ -1,134 +1,227 @@
 """
 Image preprocessing pipeline using OpenCV
+Optimised for both printed thermal receipts and handwritten notes.
 """
 import io
 import cv2
 import numpy as np
-from PIL import Image
-from typing import Tuple
+from PIL import Image, ImageOps
+from typing import Tuple, List
 
 from core.logging_config import logger
 
 
 class ImagePreprocessor:
-    """Handles image preprocessing for OCR"""
-    
+    """Handles image preprocessing for OCR – multi-strategy for best results."""
+
+    # ------------------------------------------------------------------ #
+    #  Byte → OpenCV image
+    # ------------------------------------------------------------------ #
     @staticmethod
     def bytes_to_image(image_bytes: bytes) -> np.ndarray:
-        """Convert image bytes to OpenCV format"""
+        """Convert raw image bytes to a BGR OpenCV ndarray."""
         try:
-            # Open with PIL first
             pil_image = Image.open(io.BytesIO(image_bytes))
-            
-            # Convert to RGB if needed
-            if pil_image.mode != 'RGB':
-                pil_image = pil_image.convert('RGB')
-            
-            # Convert to numpy array
+
+            # Fix EXIF orientation (phone cameras)
+            pil_image = ImageOps.exif_transpose(pil_image) or pil_image
+
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+
             image = np.array(pil_image)
-            
-            # Convert RGB to BGR (OpenCV format)
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            
             return image
         except Exception as e:
             logger.error(f"Error converting bytes to image: {e}")
             raise ValueError(f"Invalid image format: {e}")
-    
+
+    # ------------------------------------------------------------------ #
+    #  Resize to sane dimensions
+    # ------------------------------------------------------------------ #
     @staticmethod
-    def preprocess(image: np.ndarray) -> np.ndarray:
+    def resize_for_ocr(image: np.ndarray, max_width: int = 2400) -> np.ndarray:
         """
-        Apply preprocessing pipeline for better OCR
-        
-        Steps:
-        1. Denoise
-        2. Convert to grayscale
-        3. Apply adaptive thresholding
-        4. Deskew if needed
+        Resize so longest side ≤ max_width while keeping aspect ratio.
+        Upscale tiny images for better OCR on handwriting.
         """
-        try:
-            # 1. Denoise
-            denoised = cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 15)
-            
-            # 2. Convert to grayscale
-            gray = cv2.cvtColor(denoised, cv2.COLOR_BGR2GRAY)
-            
-            # 3. Apply adaptive thresholding
-            thresh = cv2.adaptiveThreshold(
-                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                cv2.THRESH_BINARY, 11, 2
-            )
-            
-            # 4. Deskew
-            deskewed = ImagePreprocessor.deskew(thresh)
-            
-            # 5. Increase contrast
-            enhanced = ImagePreprocessor.enhance_contrast(deskewed)
-            
-            return enhanced
-            
-        except Exception as e:
-            logger.warning(f"Preprocessing failed, using original: {e}")
-            # Return grayscale of original if preprocessing fails
-            return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
+        h, w = image.shape[:2]
+
+        # Up-scale tiny receipt photos
+        if max(h, w) < 800:
+            scale = 1600 / max(h, w)
+            image = cv2.resize(image, None, fx=scale, fy=scale,
+                               interpolation=cv2.INTER_CUBIC)
+            h, w = image.shape[:2]
+
+        if w > max_width:
+            scale = max_width / w
+            image = cv2.resize(image, None, fx=scale, fy=scale,
+                               interpolation=cv2.INTER_AREA)
+        return image
+
+    # ------------------------------------------------------------------ #
+    #  Deskew (Hough-line based – more robust than minAreaRect)
+    # ------------------------------------------------------------------ #
     @staticmethod
     def deskew(image: np.ndarray) -> np.ndarray:
-        """Correct image rotation/skew"""
+        """Correct rotation by detecting dominant text-line angle."""
         try:
-            coords = np.column_stack(np.where(image > 0))
-            if len(coords) == 0:
+            # Detect edges
+            edges = cv2.Canny(image, 50, 150, apertureSize=3)
+            lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
+                                    threshold=100, minLineLength=60,
+                                    maxLineGap=10)
+            if lines is None or len(lines) == 0:
                 return image
-            
-            angle = cv2.minAreaRect(coords)[-1]
-            
-            if angle < -45:
-                angle = -(90 + angle)
-            else:
-                angle = -angle
-            
-            # Only deskew if angle is significant
-            if abs(angle) < 0.5:
+
+            angles = []
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+                if abs(angle) < 30:          # only near-horizontal lines
+                    angles.append(angle)
+
+            if not angles:
                 return image
-            
+
+            median_angle = float(np.median(angles))
+            if abs(median_angle) < 0.3:
+                return image
+
             (h, w) = image.shape[:2]
-            center = (w // 2, h // 2)
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            rotated = cv2.warpAffine(
-                image, M, (w, h),
-                flags=cv2.INTER_CUBIC,
-                borderMode=cv2.BORDER_REPLICATE
-            )
-            
+            M = cv2.getRotationMatrix2D((w // 2, h // 2), median_angle, 1.0)
+            rotated = cv2.warpAffine(image, M, (w, h),
+                                     flags=cv2.INTER_CUBIC,
+                                     borderMode=cv2.BORDER_REPLICATE)
+            logger.info(f"Deskewed image by {median_angle:.1f}°")
             return rotated
         except Exception as e:
             logger.warning(f"Deskew failed: {e}")
             return image
-    
+
+    # ------------------------------------------------------------------ #
+    #  Individual enhancement helpers
+    # ------------------------------------------------------------------ #
     @staticmethod
-    def enhance_contrast(image: np.ndarray) -> np.ndarray:
-        """Enhance image contrast using CLAHE"""
+    def enhance_contrast(gray: np.ndarray) -> np.ndarray:
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        return clahe.apply(gray)
+
+    @staticmethod
+    def sharpen(gray: np.ndarray) -> np.ndarray:
+        kernel = np.array([[-1, -1, -1],
+                           [-1,  9, -1],
+                           [-1, -1, -1]], dtype=np.float32)
+        return cv2.filter2D(gray, -1, kernel)
+
+    # ------------------------------------------------------------------ #
+    #  Strategy A – works best on printed thermal receipts
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def preprocess_printed(image: np.ndarray) -> np.ndarray:
         try:
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            enhanced = clahe.apply(image)
-            return enhanced
+            denoised = cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 15)
+            gray = cv2.cvtColor(denoised, cv2.COLOR_BGR2GRAY)
+            gray = ImagePreprocessor.enhance_contrast(gray)
+            thresh = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 31, 15,
+            )
+            return thresh
         except Exception as e:
-            logger.warning(f"Contrast enhancement failed: {e}")
-            return image
-    
-    def process_for_ocr(self, image_bytes: bytes) -> Tuple[np.ndarray, np.ndarray]:
+            logger.warning(f"preprocess_printed failed: {e}")
+            return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # ------------------------------------------------------------------ #
+    #  Strategy B – works best on handwritten / pen receipts
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def preprocess_handwritten(image: np.ndarray) -> np.ndarray:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # Bilateral filter preserves edges (ink strokes)
+            gray = cv2.bilateralFilter(gray, 9, 75, 75)
+            gray = ImagePreprocessor.enhance_contrast(gray)
+            gray = ImagePreprocessor.sharpen(gray)
+            # Otsu binarization works better for handwriting
+            _, thresh = cv2.threshold(
+                gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            return thresh
+        except Exception as e:
+            logger.warning(f"preprocess_handwritten failed: {e}")
+            return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # ------------------------------------------------------------------ #
+    #  Strategy C – grayscale + CLAHE only (good for photos in low light)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def preprocess_simple(image: np.ndarray) -> np.ndarray:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            gray = ImagePreprocessor.enhance_contrast(gray)
+            return gray
+        except Exception:
+            return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # ------------------------------------------------------------------ #
+    #  Public API – returns all variants the OCR layer can pick from
+    # ------------------------------------------------------------------ #
+    def process_for_ocr(
+        self, image_bytes: bytes
+    ) -> Tuple[np.ndarray, List[np.ndarray]]:
         """
-        Complete preprocessing pipeline
-        
-        Returns:
-            Tuple of (original_image, preprocessed_image)
+        Full preprocessing pipeline.
+
+        Returns
+        -------
+        original : BGR image
+        variants : list of grayscale images preprocessed with different
+                   strategies. The OCR layer runs each one and keeps the
+                   result with the highest confidence.
         """
-        # Convert bytes to image
         original = self.bytes_to_image(image_bytes)
-        
-        # Apply preprocessing
-        processed = self.preprocess(original)
-        
-        logger.info(f"Image preprocessed: {original.shape} -> {processed.shape}")
-        
-        return original, processed
+        original = self.resize_for_ocr(original)
+
+        # Deskew on the colour image before splitting into strategies
+        deskewed = self.deskew(
+            cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+        )
+        # Reconstruct a colour version for the per-strategy pipelines
+        deskewed_bgr = original.copy()
+        # Apply the same rotation to the colour image
+        try:
+            edges = cv2.Canny(deskewed, 50, 150, apertureSize=3)
+            lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
+                                    threshold=100, minLineLength=60,
+                                    maxLineGap=10)
+            if lines is not None:
+                angles = [np.degrees(np.arctan2(
+                    l[0][3] - l[0][1], l[0][2] - l[0][0]))
+                    for l in lines if abs(np.degrees(np.arctan2(
+                        l[0][3] - l[0][1], l[0][2] - l[0][0]))) < 30]
+                if angles:
+                    med = float(np.median(angles))
+                    if abs(med) >= 0.3:
+                        h, w = original.shape[:2]
+                        M = cv2.getRotationMatrix2D(
+                            (w // 2, h // 2), med, 1.0)
+                        deskewed_bgr = cv2.warpAffine(
+                            original, M, (w, h),
+                            flags=cv2.INTER_CUBIC,
+                            borderMode=cv2.BORDER_REPLICATE)
+        except Exception:
+            pass
+
+        variants = [
+            self.preprocess_printed(deskewed_bgr),
+            self.preprocess_handwritten(deskewed_bgr),
+            self.preprocess_simple(deskewed_bgr),
+        ]
+
+        logger.info(
+            f"Image preprocessed: {original.shape} → "
+            f"{len(variants)} variants generated"
+        )
+        return original, variants

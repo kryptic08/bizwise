@@ -1,31 +1,32 @@
 # FastAPI Core
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.6
-pydantic==2.5.3
-pydantic-settings==2.1.0
+fastapi>=0.109.0,<1.0
+uvicorn[standard]>=0.27.0,<1.0
+python-multipart>=0.0.6,<1.0
+pydantic>=2.5.3,<3.0
+pydantic-settings>=2.1.0,<3.0
 
 # Image Processing (lightweight)
-Pillow==10.2.0
-opencv-python-headless==4.9.0.80
-numpy==1.26.3
+Pillow>=10.2.0
+opencv-python-headless>=4.9.0
+numpy>=1.26.0,<2.0
 
 # OCR (Free options)
-pytesseract==0.3.10
-easyocr==1.7.0
+pytesseract>=0.3.10
+easyocr>=1.7.0
 
-# NLP & ML (CPU-optimized)
-torch==2.1.2
-transformers==4.37.0
-sentencepiece==0.1.99
+# NLP & ML (CPU-only to save space)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.1.0
+transformers>=4.37.0
+sentencepiece>=0.1.99
 
 # Text Processing
-python-dateutil==2.8.2
-regex==2023.12.25
+python-dateutil>=2.8.2
+regex>=2023.12.25
 
 # Utilities
-python-dotenv==1.0.0
-aiofiles==23.2.1
+python-dotenv>=1.0.0
+aiofiles>=23.2.1
 
 # Monitoring
-python-json-logger==2.0.7
+python-json-logger>=2.0.7
