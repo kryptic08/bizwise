@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     API_KEY: Optional[str] = None
     ENVIRONMENT: str = "development"
     
+    # Gemini AI Configuration
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-2.5-flash-lite"  # Model used in frontend, can be updated without app changes
+    
     # Model Configuration
     OCR_ENGINE: str = "tesseract"
     USE_NLP_MODEL: bool = False  # BERT NER disabled – too heavy for 512 MB free tier

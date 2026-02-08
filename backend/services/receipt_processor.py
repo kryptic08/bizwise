@@ -93,4 +93,6 @@ class ReceiptProcessor:
                 "tesseract": self.ocr_service.tesseract_available,
             },
             "nlp_engine": "regex-heuristic",
+            "bert_ner_enabled": self.nlp_extractor.use_model,
+            "bert_ner_loaded": self.nlp_extractor._bert is not None,
         }

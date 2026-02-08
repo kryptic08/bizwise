@@ -1,11 +1,10 @@
+import { HelpTooltip } from "@/components/HelpTooltip";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
-  ArrowDown,
   ArrowDownRight,
   ArrowUpRight,
   Coins,
-  HelpCircle,
   LayoutGrid,
   Receipt,
   Utensils,
@@ -249,14 +248,11 @@ export default function HomeScreen() {
               </Text>
               <Text style={styles.subWelcomeText}>{getGreeting()}</Text>
             </View>
-            <View style={styles.headerIcons}>
-              <TouchableOpacity style={styles.iconCircle}>
-                <ArrowDown color={COLORS.textDark} size={18} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconCircle}>
-                <HelpCircle color={COLORS.textDark} size={18} />
-              </TouchableOpacity>
-            </View>
+            <HelpTooltip
+              title="Dashboard Help"
+              content="View your business overview including today's sales, total balance, income, and expenses. Tap any card to see detailed breakdowns. Use the quick actions to add sales or products."
+              iconColor={COLORS.textDark}
+            />
           </View>
 
           {/* Balance Cards */}

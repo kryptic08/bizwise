@@ -1,6 +1,7 @@
+import { HelpTooltip } from "@/components/HelpTooltip";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { ArrowLeft, HelpCircle, Pencil, Plus } from "lucide-react-native";
+import { ArrowLeft, Pencil, Plus } from "lucide-react-native";
 import React, { useMemo, useState } from "react";
 import {
   Dimensions,
@@ -203,9 +204,10 @@ export default function CounterScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Counter</Text>
         <TouchableOpacity style={styles.iconButton}>
-          <View style={styles.helpCircleBg}>
-            <HelpCircle color={COLORS.primaryBlue} size={18} />
-          </View>
+          <HelpTooltip
+            title="Counter Help"
+            content="Manage your product inventory here. Add new products with their stock quantities, edit existing items, or tap a product to quickly add it to today's sales. The counter helps you track what's in stock."
+          />
         </TouchableOpacity>
       </View>
 

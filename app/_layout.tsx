@@ -8,7 +8,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import ConvexClientProvider from "./providers/ConvexClientProvider";
 
 export const unstable_settings = {
-  anchor: "(tabs)",
+  initialRouteName: "welcome",
 };
 
 // Create custom theme with transparent tab bar background
@@ -36,16 +36,27 @@ function RootLayoutNav() {
     return () => clearTimeout(timer);
   }, []);
 
-  // Handle PIN lock routing
+  // Handle auth and PIN lock routing
   useEffect(() => {
     if (!isLoading && !showWelcome) {
       const inAuthGroup = segments[0] === "(tabs)";
+      const onAuthScreen =
+        segments[0] === "welcome" ||
+        segments[0] === "onboarding" ||
+        segments[0] === "login" ||
+        segments[0] === "reset";
       const onPinScreen =
         segments[0] === "pin-entry" || segments[0] === "pin-setup";
 
-      if (user && isPinLocked && !onPinScreen) {
+      if (!user && inAuthGroup) {
+        // User is NOT logged in but trying to access protected screens - redirect to welcome
+        router.replace("/welcome");
+      } else if (user && isPinLocked && !onPinScreen) {
         // User is logged in, has PIN, and app is locked - show PIN entry
         router.replace("/pin-entry");
+      } else if (user && !isPinLocked && onAuthScreen) {
+        // User is logged in and on an auth screen - go to main app
+        router.replace("/(tabs)");
       }
     }
   }, [user, isLoading, isPinLocked, segments, showWelcome]);

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "BizWise - Expense Manager",
+    "name": "BizWise",
     "slug": "bizwise-expense-manager",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,9 +13,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#3b6ea5"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bizwise.expensemanager"
@@ -23,6 +21,7 @@
     "android": {
       "package": "com.bizwise.expensemanager",
       "versionCode": 1,
+      "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#3b6ea5",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

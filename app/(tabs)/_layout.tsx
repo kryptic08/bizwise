@@ -24,10 +24,7 @@ function CustomTabBar({ state, descriptors, navigation, colors }: any) {
           return (
             <View key="plus" style={[styles.tabItem, styles.plusButton]}>
               <TouchableOpacity
-                style={[
-                  styles.plusButtonInner,
-                  { backgroundColor: colors.tint },
-                ]}
+                style={styles.plusButtonInner}
                 onPress={() => {
                   navigation.navigate("add-expense");
                 }}
@@ -204,7 +201,7 @@ const styles = StyleSheet.create({
   },
   activeIconContainer: {
     backgroundColor: "#3b6ea5",
-    borderRadius: 30,
+    borderRadius: 15,
   },
   plusButton: {
     flex: 1,
@@ -212,9 +209,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   plusButtonInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 65,
+    height: 65,
+    borderRadius: 25,
+    backgroundColor: "#3b6ea5",
     justifyContent: "center",
     alignItems: "center",
     marginTop: -28,

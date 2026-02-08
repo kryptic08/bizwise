@@ -12,8 +12,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from schemas import ReceiptResponse, ErrorResponse, HealthResponse
+from schemas import (
+    ReceiptResponse, 
+    ErrorResponse, 
+    HealthResponse,
+    ParseReceiptRequest,
+    ParseReceiptResponse
+)
 from services.receipt_processor import ReceiptProcessor
+from services.gemini_parser import get_gemini_parser
 from core.config import settings
 from core.logging_config import logger
 
@@ -195,6 +202,74 @@ async def model_info(api_key: str = Depends(verify_api_key)):
     if processor:
         return processor.get_model_info()
     return {"error": "Processor not initialized"}
+
+
+@app.post(
+    "/api/v1/receipt/parse",
+    response_model=ParseReceiptResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def parse_receipt_text(
+    request: ParseReceiptRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Parse OCR text into structured expense items using Gemini AI
+    
+    This endpoint allows the mobile app to send OCR text and receive
+    parsed expense items. The Gemini model version can be updated
+    server-side without requiring app updates.
+    
+    Args:
+        request: Contains OCR text to parse
+    
+    Returns:
+        List of parsed expense items with categories
+    """
+    start_time = time.time()
+    
+    try:
+        if not request.ocr_text or len(request.ocr_text.strip()) < 5:
+            raise HTTPException(
+                status_code=400,
+                detail="OCR text is required and must be at least 5 characters"
+            )
+        
+        logger.info(f"Parsing receipt text ({len(request.ocr_text)} chars)")
+        
+        # Get Gemini parser and parse text
+        parser = get_gemini_parser()
+        items = await parser.parse_receipt_text(request.ocr_text)
+        
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        logger.info(f"Parsed {len(items)} items in {processing_time}ms")
+        
+        return ParseReceiptResponse(
+            success=True,
+            items=items,
+            processing_time_ms=processing_time
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        processing_time = int((time.time() - start_time) * 1000)
+        error_msg = str(e)
+        logger.error(f"Error parsing receipt: {error_msg}\n{traceback.format_exc()}")
+        
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "items": [],
+                "processing_time_ms": processing_time,
+                "error": error_msg
+            }
+        )
 
 
 if __name__ == "__main__":

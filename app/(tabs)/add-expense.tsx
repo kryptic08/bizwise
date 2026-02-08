@@ -1,5 +1,6 @@
+import { HelpTooltip } from "@/components/HelpTooltip";
 import { useMutation } from "convex/react";
-import { CameraView, useCameraPermissions } from "expo-camera";
+import { CameraView, FlashMode, useCameraPermissions } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { useRouter } from "expo-router";
@@ -7,9 +8,11 @@ import {
   ArrowLeft,
   Camera,
   ChevronDown,
-  HelpCircle,
   Plus,
+  Trash2,
   X,
+  Zap,
+  ZapOff,
 } from "lucide-react-native";
 import React, { useRef, useState } from "react";
 import {
@@ -27,10 +30,6 @@ import {
 } from "react-native";
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
-import {
-  mapReceiptToExpenseItems,
-  processReceiptWithAPI,
-} from "../utils/receiptAPI";
 
 const COLORS = {
   primaryBlue: "#3b6ea5",
@@ -44,9 +43,9 @@ const COLORS = {
 const OCR_API_URL = "https://api.ocr.space/parse/image";
 const OCR_API_KEY = process.env.EXPO_PUBLIC_OCR_API_KEY!;
 
-// Gemini AI API configuration for NLP parsing
+// Google Gemini AI for direct parsing (faster than backend proxy)
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY!;
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
 
 interface ExpenseItem {
   id: string;
@@ -82,6 +81,7 @@ export default function AddExpenseScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showCameraView, setShowCameraView] = useState(false);
+  const [flashMode, setFlashMode] = useState<FlashMode>("off");
 
   const getCurrentDate = () => {
     const date = new Date();
@@ -222,6 +222,10 @@ export default function AddExpenseScreen() {
     setOcrText("");
   };
 
+  const toggleFlash = () => {
+    setFlashMode((current) => (current === "off" ? "on" : "off"));
+  };
+
   const takePicture = async () => {
     if (cameraRef.current) {
       try {
@@ -255,42 +259,16 @@ export default function AddExpenseScreen() {
       );
       console.log("Compressed image URI:", compressedImage.uri);
 
-      // ── PRIMARY: BizWise Receipt API (self-hosted on Render) ──
-      try {
-        console.log("🚀 Trying BizWise Receipt API (primary)...");
-        const apiResult = await processReceiptWithAPI(compressedImage.uri);
-
-        if (apiResult.success && apiResult.data) {
-          console.log("✅ BizWise API succeeded");
-          setOcrText(apiResult.data.raw_text || "");
-
-          const mapped = mapReceiptToExpenseItems(apiResult.data);
-          if (mapped.length > 0) {
-            setExpenses(mapped);
-            setTimeout(() => closeOCRView(), 500);
-            Alert.alert(
-              "Receipt Processed",
-              `Found ${mapped.length} item(s) (confidence: ${(apiResult.data.confidence_score * 100).toFixed(0)}%). Review and adjust below.`,
-              [{ text: "OK" }],
-            );
-            return; // Done – skip fallback
-          }
-          // API returned no items – fall through to backup
-          console.log("⚠️ BizWise API returned 0 items, trying backup...");
-        }
-      } catch (primaryError) {
-        const errMsg = (primaryError as Error).message || String(primaryError);
-        console.warn("⚠️ BizWise API failed:", errMsg);
-        console.log("↪ Falling back to OCR.space + Gemini backup…");
-      }
-
-      // ── BACKUP: OCR.space → Gemini AI ──
-      console.log("🔄 Using backup: OCR.space + Gemini AI...");
+      // Convert to base64 for OCR.space
       const base64Image = await FileSystem.readAsStringAsync(
         compressedImage.uri,
         { encoding: "base64" },
       );
 
+      console.log("Base64 image length:", base64Image?.length);
+      console.log("Starting OCR.space API...");
+
+      // ── OCR.space: Extract text from image ──
       const formData = new FormData();
       formData.append("apikey", OCR_API_KEY);
       formData.append("base64Image", `data:image/jpeg;base64,${base64Image}`);
@@ -300,10 +278,13 @@ export default function AddExpenseScreen() {
       formData.append("scale", "true");
       formData.append("OCREngine", "2");
 
+      console.log("Making OCR.space API request...");
       const response = await fetch(OCR_API_URL, {
         method: "POST",
         body: formData,
       });
+
+      console.log("OCR.space API response status:", response.status);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -313,6 +294,7 @@ export default function AddExpenseScreen() {
       }
 
       const result = await response.json();
+
       let extractedText = "";
       if (
         result.ParsedResults &&
@@ -320,6 +302,7 @@ export default function AddExpenseScreen() {
         result.ParsedResults[0].ParsedText
       ) {
         extractedText = result.ParsedResults[0].ParsedText;
+        console.log("✅ OCR.space extracted text successfully");
       } else if (result.ErrorMessage && result.ErrorMessage.length > 0) {
         throw new Error(`OCR.space error: ${result.ErrorMessage[0]}`);
       } else if (result.IsErroredOnProcessing) {
@@ -328,12 +311,15 @@ export default function AddExpenseScreen() {
         throw new Error("No text found in the image");
       }
 
+      console.log("Extracted text:", extractedText);
       setOcrText(extractedText);
+
+      // ── Gemini AI: Parse the OCR text into structured items ──
       await parseReceiptWithAI(extractedText);
     } catch (error) {
-      console.error("All OCR methods failed:", (error as Error).message);
+      console.error("OCR Error:", (error as Error).message);
 
-      // Last resort – demo/mock data
+      // Fallback to mock data if API fails
       const mockText = await simulateAdvancedOCR();
       setOcrText(mockText);
       await parseReceiptWithAI(mockText);
@@ -348,12 +334,24 @@ export default function AddExpenseScreen() {
     }
   };
 
-  // Parse receipt text using Gemini AI for intelligent NLP
+  // Parse receipt text using Gemini AI directly
   const parseReceiptWithAI = async (text: string) => {
     console.log("Parsing receipt with Gemini AI...");
 
     try {
-      const prompt = `You are an expert at parsing receipt text. Analyze the following receipt text and extract all purchased items.
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: `You are an expert at parsing receipt text from the Philippines. Analyze the following receipt text and extract all purchased items.
 
 For each item found, provide:
 1. title: The name of the item (clean it up, capitalize properly)
@@ -361,11 +359,16 @@ For each item found, provide:
 3. quantity: How many were purchased (default to 1 if not specified)
 4. category: One of these categories: Food, Office, Transportation, Utilities, Maintenance, Marketing, Medical, Equipment, General
 
-IMPORTANT RULES:
+IMPORTANT RULES FOR PHILIPPINE RECEIPTS:
+- Many receipts are HANDWRITTEN and may not have PHP/₱ symbols
+- Amounts like "2345" or "1500" are Philippine pesos (don't divide by 100, use as-is)
+- Common price patterns: "2345" = ₱2,345.00, "150" = ₱150.00, "15.50" = ₱15.50
+- If amount has no decimal point and is 2+ digits, treat it as whole pesos
 - Only extract actual purchased items, NOT totals, subtotals, change, tax, VAT, discounts
 - Skip store names, addresses, dates, times, receipt numbers, cashier names
 - If you see "x2" or "x 3" or "qty: 2", that's the quantity
 - The amount should be the UNIT price, not the line total
+- For handwritten receipts, be lenient with OCR errors ("S" might be "5", "O" might be "0")
 - If unsure about category, use "General"
 - Return ONLY valid JSON array, no other text
 
@@ -375,27 +378,20 @@ ${text}
 """
 
 Return a JSON array like this (no markdown, just raw JSON):
-[{"title": "Item Name", "amount": 100.00, "quantity": 1, "category": "Food"}]
+[{"title": "Sisig", "amount": 150, "quantity": 1, "category": "Food"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Food"}]
 
-If no items found, return: []`;
-
-      const response = await fetch(GEMINI_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: prompt }],
+If no items found, return: []`,
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 2048,
             },
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 2048,
-          },
-        }),
-      });
+          }),
+        },
+      );
 
       console.log("Gemini API response status:", response.status);
 
@@ -408,33 +404,31 @@ If no items found, return: []`;
       const result = await response.json();
       console.log("Gemini API result:", JSON.stringify(result, null, 2));
 
-      // Extract the text content from Gemini response
-      const aiResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      const aiResponse =
+        result.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
       if (!aiResponse) {
-        throw new Error("No response from Gemini AI");
+        console.log("No response from Gemini AI");
+        throw new Error("No AI response");
       }
 
-      console.log("AI Response:", aiResponse);
-
-      // Parse the JSON from AI response
-      // Clean up the response - remove markdown code blocks if present
-      let cleanedResponse = aiResponse
-        .replace(/```json\n?/g, "")
-        .replace(/```\n?/g, "")
+      // Extract JSON from AI response (remove markdown code blocks if present)
+      const cleanedResponse = aiResponse
+        .replace(/```json\n/g, "")
+        .replace(/```\n/g, "")
+        .replace(/```/g, "")
         .trim();
 
-      // Find the JSON array in the response
       const jsonMatch = cleanedResponse.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
-        throw new Error("Could not find JSON array in AI response");
+        console.log("Could not find JSON array in AI response");
+        throw new Error("Invalid AI response format");
       }
 
-      const parsedItems = JSON.parse(jsonMatch[0]);
-      console.log("Parsed items from AI:", parsedItems);
+      const items = JSON.parse(jsonMatch[0]);
 
-      if (Array.isArray(parsedItems) && parsedItems.length > 0) {
-        const newExpenses: ExpenseItem[] = parsedItems.map((item: any) => ({
+      if (Array.isArray(items) && items.length > 0) {
+        const newExpenses: ExpenseItem[] = items.map((item: any) => ({
           id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
           category: item.category || "General",
           title: item.title || "Unknown Item",
@@ -458,8 +452,10 @@ If no items found, return: []`;
           [{ text: "OK" }],
         );
       } else {
-        // Fallback to regex parsing if AI returns empty
-        console.log("AI returned no items, falling back to regex parsing...");
+        // Fallback to regex parsing if Gemini returns no items
+        console.log(
+          "Gemini returned no items, falling back to regex parsing...",
+        );
         parseReceiptText(text);
       }
     } catch (error) {
@@ -1119,6 +1115,34 @@ TOTAL: ₱615.00`,
     setOcrText("");
   };
 
+  const clearScan = () => {
+    Alert.alert(
+      "Clear Scan",
+      "Are you sure you want to clear all scanned items and start over?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: () => {
+            setExpenses([
+              {
+                id: "1",
+                category: "",
+                title: "",
+                amount: "",
+                quantity: "",
+                total: "0.00",
+              },
+            ]);
+            setCapturedImage(null);
+            setOcrText("");
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar
@@ -1136,9 +1160,10 @@ TOTAL: ₱615.00`,
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Add Expense</Text>
         <TouchableOpacity style={styles.headerButton}>
-          <View style={styles.helpCircleBg}>
-            <HelpCircle color={COLORS.primaryBlue} size={18} />
-          </View>
+          <HelpTooltip
+            title="Add Expense Help"
+            content="Add business expenses manually or scan receipts with your camera. The OCR scanner will automatically extract item details. You can add multiple items, edit quantities and prices, then save all at once."
+          />
         </TouchableOpacity>
       </View>
 
@@ -1258,6 +1283,17 @@ TOTAL: ₱615.00`,
             <Text style={styles.cameraButtonText}>Scan Receipt</Text>
           </TouchableOpacity>
 
+          {/* Clear Scan Button */}
+          {(capturedImage ||
+            ocrText ||
+            expenses.length > 1 ||
+            expenses[0].title) && (
+            <TouchableOpacity style={styles.clearButton} onPress={clearScan}>
+              <Trash2 color={COLORS.textDark} size={20} />
+              <Text style={styles.clearButtonText}>Clear Scan</Text>
+            </TouchableOpacity>
+          )}
+
           {/* Bottom Spacing for tab bar */}
           <View style={{ height: 100 }} />
         </ScrollView>
@@ -1271,7 +1307,12 @@ TOTAL: ₱615.00`,
         onRequestClose={() => setShowCameraView(false)}
       >
         <View style={styles.container}>
-          <CameraView ref={cameraRef} style={styles.cameraView} facing="back">
+          <CameraView
+            ref={cameraRef}
+            style={styles.cameraView}
+            facing="back"
+            flash={flashMode}
+          >
             {/* Camera Overlay with Frame Guide */}
             <View style={styles.cameraOverlay}>
               {/* Header */}
@@ -1283,7 +1324,16 @@ TOTAL: ₱615.00`,
                   <X color={COLORS.white} size={24} />
                 </TouchableOpacity>
                 <Text style={styles.cameraTitle}>Scan Receipt</Text>
-                <View style={styles.closeButton} />
+                <TouchableOpacity
+                  onPress={toggleFlash}
+                  style={styles.closeButton}
+                >
+                  {flashMode === "on" ? (
+                    <Zap color={COLORS.white} size={24} fill={COLORS.white} />
+                  ) : (
+                    <ZapOff color={COLORS.white} size={24} />
+                  )}
+                </TouchableOpacity>
               </View>
 
               {/* Frame Guide */}
@@ -1602,6 +1652,23 @@ const styles = StyleSheet.create({
   },
   cameraButtonText: {
     color: COLORS.white,
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  clearButton: {
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  clearButtonText: {
+    color: COLORS.textDark,
     fontSize: 16,
     fontWeight: "600",
   },

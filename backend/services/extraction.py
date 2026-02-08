@@ -7,8 +7,13 @@ Handles the wide variety of receipt formats seen in the real world:
   • Restaurant bills (with tips, tax, sub-totals)
   • International formats (comma-decimal, varying date layouts)
 
-Uses layered regex + heuristic scoring, with an optional BERT NER
-fallback for merchant-name extraction.
+Two extraction engines:
+  1. RegexExtractor  – fast, zero-dependency heuristic (always available)
+  2. BERTExtractor   – BERT-based NER for merchant / entity recognition
+                       (lazy-loaded, disabled by default – enable with
+                        USE_NLP_MODEL=true when server has ≥ 1 GB RAM)
+
+The public ``NLPExtractor`` class picks the right engine based on config.
 """
 
 import re
@@ -64,13 +69,146 @@ _NOISE = re.compile(
 )
 
 
+# ================================================================== #
+#  BERT NER Extractor (optional – future use)
+# ================================================================== #
+class BERTExtractor:
+    """
+    BERT-based Named Entity Recognition for receipt parsing.
+
+    Uses ``dslim/bert-base-NER`` to identify ORG (merchant), DATE,
+    and MONEY entities in OCR text.  Loaded lazily on first call so
+    the model only consumes RAM when explicitly enabled.
+
+    Requirements (NOT installed by default – add when upgrading server):
+        pip install torch transformers sentencepiece
+
+    Enable via env var:
+        USE_NLP_MODEL=true   (requires ≥ 1 GB RAM)
+    """
+
+    _instance = None  # singleton so we only load once
+
+    def __init__(self):
+        self._pipeline = None
+        self._loaded = False
+
+    # ---- lazy singleton ---- #
+    @classmethod
+    def get_instance(cls) -> "BERTExtractor":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    # ---- load model on first use ---- #
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+        try:
+            from transformers import pipeline as hf_pipeline
+
+            self._pipeline = hf_pipeline(
+                "ner",
+                model="dslim/bert-base-NER",
+                aggregation_strategy="simple",
+            )
+            self._loaded = True
+            logger.info("BERT NER model loaded (dslim/bert-base-NER)")
+        except ImportError:
+            logger.warning(
+                "BERT NER unavailable – install torch + transformers "
+                "to enable. Falling back to regex."
+            )
+            self._loaded = False
+        except Exception as e:
+            logger.error(f"Failed to load BERT NER model: {e}")
+            self._loaded = False
+
+    @property
+    def is_available(self) -> bool:
+        self._ensure_loaded()
+        return self._loaded and self._pipeline is not None
+
+    # ---- extract entities ---- #
+    def extract_entities(self, text: str) -> Dict[str, List[Dict]]:
+        """
+        Run NER on ``text`` and return grouped entities.
+
+        Returns dict with keys ``ORG``, ``PER``, ``LOC``, ``MISC``
+        each mapping to a list of ``{"word": str, "score": float}``.
+        """
+        if not self.is_available:
+            return {}
+        try:
+            # BERT has a 512-token limit – use first ~1000 chars
+            truncated = text[:1000]
+            raw = self._pipeline(truncated)
+
+            grouped: Dict[str, List[Dict]] = {}
+            for ent in raw:
+                group = ent.get("entity_group", "MISC")
+                word = ent.get("word", "").strip()
+                score = ent.get("score", 0.0)
+                # Filter out sub-word fragments
+                if word.startswith("##") or len(word) < 2:
+                    continue
+                if score < 0.60:
+                    continue
+                grouped.setdefault(group, []).append(
+                    {"word": word, "score": round(score, 3)}
+                )
+
+            logger.info(
+                f"BERT NER found: "
+                + ", ".join(f"{k}={len(v)}" for k, v in grouped.items())
+            )
+            return grouped
+        except Exception as e:
+            logger.warning(f"BERT NER failed: {e}")
+            return {}
+
+    def extract_merchant_bert(self, text: str) -> Optional[str]:
+        """Try to find the merchant name via ORG entities."""
+        entities = self.extract_entities(text)
+        orgs = entities.get("ORG", [])
+        if not orgs:
+            return None
+        # Pick the longest high-confidence ORG
+        best = max(orgs, key=lambda e: (e["score"], len(e["word"])))
+        name = best["word"]
+        if 3 <= len(name) <= 60:
+            return name
+        return None
+
+
+# ================================================================== #
+#  Regex Extractor (always available – primary on free tier)
+# ================================================================== #
+
+
 class NLPExtractor:
-    """Extract structured data from OCR text using regex heuristics."""
+    """
+    Extract structured data from OCR text.
+
+    Uses regex heuristics by default.  When ``use_model=True``, also
+    tries BERT NER for merchant-name extraction (requires torch +
+    transformers installed).
+    """
 
     def __init__(self, use_model: bool = False):
-        # BERT NER disabled — too heavy for 512 MB free tier
-        self.use_model = False
-        self.model = None
+        self.use_model = use_model
+        self._bert: Optional[BERTExtractor] = None
+        if use_model:
+            try:
+                self._bert = BERTExtractor.get_instance()
+                if self._bert.is_available:
+                    logger.info("BERT NER enabled for extraction")
+                else:
+                    logger.info("BERT NER requested but not available – regex only")
+                    self._bert = None
+            except Exception as e:
+                logger.warning(f"BERT init skipped: {e}")
+                self._bert = None
 
     # ---------------------------------------------------------------- #
     #  Public API
@@ -127,6 +265,13 @@ class NLPExtractor:
         for line in lines[:3]:
             if len(line) > 3:
                 return self._clean_merchant(line)
+
+        # BERT NER fallback (only when enabled & available)
+        if self._bert is not None:
+            bert_merchant = self._bert.extract_merchant_bert(text)
+            if bert_merchant:
+                logger.info(f"BERT NER found merchant: {bert_merchant}")
+                return bert_merchant
 
         return None
 

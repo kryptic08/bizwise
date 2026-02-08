@@ -13,6 +13,26 @@ class LineItem(BaseModel):
     total: float = Field(..., description="Total for this line item")
 
 
+class ExpenseItem(BaseModel):
+    """Parsed expense item from Gemini AI"""
+    title: str = Field(..., description="Item name")
+    amount: float = Field(..., description="Unit price")
+    quantity: int = Field(default=1, description="Quantity")
+    category: str = Field(default="General", description="Expense category")
+
+
+class ParseReceiptRequest(BaseModel):
+    """Request to parse OCR text with Gemini AI"""
+    ocr_text: str = Field(..., description="Raw OCR text from receipt")
+
+
+class ParseReceiptResponse(BaseModel):
+    """Response from Gemini AI parsing"""
+    success: bool = Field(..., description="Parsing success status")
+    items: List[ExpenseItem] = Field(default_factory=list, description="Parsed expense items")
+    processing_time_ms: Optional[int] = Field(None, description="Processing time in milliseconds")
+
+
 class ReceiptData(BaseModel):
     """Extracted receipt data"""
     merchant_name: Optional[str] = Field(None, description="Merchant/store name")

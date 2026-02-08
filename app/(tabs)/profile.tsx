@@ -1,7 +1,7 @@
+import { HelpTooltip } from "@/components/HelpTooltip";
 import { useRouter } from "expo-router";
 import {
   ArrowLeft,
-  HelpCircle,
   LifeBuoy,
   LogOut,
   Settings,
@@ -121,9 +121,10 @@ export default function ProfileScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Profile</Text>
         <TouchableOpacity style={styles.iconButton}>
-          <View style={styles.helpCircleBg}>
-            <HelpCircle color={COLORS.primaryBlue} size={18} />
-          </View>
+          <HelpTooltip
+            title="Profile Help"
+            content="Manage your account settings, update your profile information, change security settings like PIN and password, or contact support. You can also delete your account from the settings page."
+          />
         </TouchableOpacity>
       </View>
 

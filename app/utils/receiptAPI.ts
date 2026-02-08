@@ -100,15 +100,12 @@ export async function processReceiptWithAPI(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000); // 45 s for processing
 
-    const response = await fetch(
-      `${RECEIPT_API_URL}/api/v1/receipt/process`,
-      {
-        method: "POST",
-        headers: { "X-API-Key": RECEIPT_API_KEY },
-        body: formData,
-        signal: controller.signal,
-      },
-    );
+    const response = await fetch(`${RECEIPT_API_URL}/api/v1/receipt/process`, {
+      method: "POST",
+      headers: { "X-API-Key": RECEIPT_API_KEY },
+      body: formData,
+      signal: controller.signal,
+    });
 
     clearTimeout(timeout);
 

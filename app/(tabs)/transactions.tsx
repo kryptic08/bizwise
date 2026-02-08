@@ -1,3 +1,4 @@
+import { HelpTooltip } from "@/components/HelpTooltip";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
@@ -6,7 +7,6 @@ import {
   ArrowUpRight,
   ChevronDown,
   Coins,
-  HelpCircle,
   Utensils,
 } from "lucide-react-native";
 import React, { useState } from "react";
@@ -264,9 +264,10 @@ export default function TransactionScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Transaction</Text>
         <TouchableOpacity style={styles.headerButton}>
-          <View style={styles.helpIconBg}>
-            <HelpCircle color={COLORS.primaryBlue} size={18} />
-          </View>
+          <HelpTooltip
+            title="Transactions Help"
+            content="View all your income and expenses in one place. Filter by income or expenses, expand each item to see details, and track your daily, weekly, or monthly financial activity. Transactions are automatically organized by date."
+          />
         </TouchableOpacity>
       </View>
 
