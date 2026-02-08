@@ -122,13 +122,6 @@ async def process_receipt(
     start_time = time.time()
     
     try:
-        # Validate file type
-        if not file.content_type or not file.content_type.startswith("image/"):
-            raise HTTPException(
-                status_code=400,
-                detail="File must be an image (JPEG, PNG, etc.)"
-            )
-        
         # Read image file
         image_bytes = await file.read()
         
@@ -136,6 +129,25 @@ async def process_receipt(
             raise HTTPException(
                 status_code=400,
                 detail="Empty file received"
+            )
+        
+        # Validate file type – be lenient since React Native FormData
+        # doesn't always send content_type correctly
+        content_type = file.content_type or ""
+        is_image = (
+            content_type.startswith("image/")
+            or content_type in ("application/octet-stream", "")
+            or (file.filename and file.filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff")))
+            or image_bytes[:4] in (
+                b"\xff\xd8\xff\xe0",  # JPEG
+                b"\xff\xd8\xff\xe1",  # JPEG EXIF
+                b"\x89PNG",           # PNG
+            )
+        )
+        if not is_image:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File must be an image. Got content_type={content_type!r}"
             )
         
         logger.info(f"Processing receipt image: {file.filename} ({len(image_bytes)} bytes)")

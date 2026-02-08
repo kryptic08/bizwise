@@ -28,8 +28,8 @@ import {
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
 import {
-  processReceiptWithAPI,
   mapReceiptToExpenseItems,
+  processReceiptWithAPI,
 } from "../utils/receiptAPI";
 
 const COLORS = {
@@ -279,7 +279,9 @@ export default function AddExpenseScreen() {
           console.log("⚠️ BizWise API returned 0 items, trying backup...");
         }
       } catch (primaryError) {
-        console.warn("⚠️ BizWise API failed, falling back to OCR.space + Gemini:", (primaryError as Error).message);
+        const errMsg = (primaryError as Error).message || String(primaryError);
+        console.warn("⚠️ BizWise API failed:", errMsg);
+        console.log("↪ Falling back to OCR.space + Gemini backup…");
       }
 
       // ── BACKUP: OCR.space → Gemini AI ──
@@ -305,7 +307,9 @@ export default function AddExpenseScreen() {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`OCR.space API error: ${response.status} - ${errorText}`);
+        throw new Error(
+          `OCR.space API error: ${response.status} - ${errorText}`,
+        );
       }
 
       const result = await response.json();

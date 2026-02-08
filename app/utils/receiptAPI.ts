@@ -8,7 +8,8 @@
 // API Configuration
 const RECEIPT_API_URL =
   process.env.EXPO_PUBLIC_RECEIPT_API_URL || "https://bizwise-api.onrender.com";
-const RECEIPT_API_KEY = process.env.EXPO_PUBLIC_RECEIPT_API_KEY || "bizwise-secret-2026-api-end";
+const RECEIPT_API_KEY =
+  process.env.EXPO_PUBLIC_RECEIPT_API_KEY || "bizwise-secret-2026-api-end";
 
 export interface LineItem {
   name: string;
@@ -34,20 +35,61 @@ export interface ReceiptResponse {
 }
 
 /**
- * Process a receipt image using the self-hosted API
+ * Wake the Render server if it's sleeping (free tier spins down after 15 min).
+ * Returns true if the server is reachable.
+ */
+async function wakeServerIfNeeded(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${RECEIPT_API_URL}/health`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Process a receipt image using the self-hosted API.
  *
- * @param imageUri - Local URI of the image to process
- * @param retryOnTimeout - Whether to retry if timeout occurs (for cold starts)
- * @returns Processed receipt data
+ * Strategy:
+ *  1. Quick health-check to see if server is awake (8 s timeout).
+ *  2. If cold → wait for it to boot (up to 60 s), then send image.
+ *  3. Send with 45 s processing timeout.
+ *  4. On timeout / network error → one automatic retry.
+ *
+ * @param imageUri  Local URI of the compressed JPEG
+ * @param attempt   Internal retry counter (callers should omit this)
  */
 export async function processReceiptWithAPI(
   imageUri: string,
-  retryOnTimeout: boolean = true,
+  attempt: number = 1,
 ): Promise<ReceiptResponse> {
-  try {
-    console.log("📤 Sending image to receipt processing API...");
+  const MAX_ATTEMPTS = 2;
 
-    // Create FormData with the image
+  try {
+    // ── 1. Wake check ──────────────────────────────────────────
+    console.log(`📤 BizWise API attempt ${attempt}/${MAX_ATTEMPTS}…`);
+    const awake = await wakeServerIfNeeded();
+
+    if (!awake) {
+      // Server is cold-starting — give it up to 60 s
+      console.log("⏳ Server waking up, waiting…");
+      const start = Date.now();
+      let ready = false;
+      while (Date.now() - start < 60000) {
+        await new Promise((r) => setTimeout(r, 4000));
+        ready = await wakeServerIfNeeded();
+        if (ready) break;
+      }
+      if (!ready) throw new Error("Server did not wake up within 60 s");
+      console.log("✅ Server is awake");
+    }
+
+    // ── 2. Send the image ──────────────────────────────────────
     const formData = new FormData();
     formData.append("file", {
       uri: imageUri,
@@ -55,25 +97,24 @@ export async function processReceiptWithAPI(
       name: "receipt.jpg",
     } as any);
 
-    // Make the request with longer timeout for potential cold start
     const controller = new AbortController();
-    const timeoutDuration = 90000; // 90 seconds for first request
-    const timeout = setTimeout(() => controller.abort(), timeoutDuration);
+    const timeout = setTimeout(() => controller.abort(), 45000); // 45 s for processing
 
-    const response = await fetch(`${RECEIPT_API_URL}/api/v1/receipt/process`, {
-      method: "POST",
-      headers: {
-        "X-API-Key": RECEIPT_API_KEY,
+    const response = await fetch(
+      `${RECEIPT_API_URL}/api/v1/receipt/process`,
+      {
+        method: "POST",
+        headers: { "X-API-Key": RECEIPT_API_KEY },
+        body: formData,
+        signal: controller.signal,
       },
-      body: formData,
-      signal: controller.signal,
-    });
+    );
 
     clearTimeout(timeout);
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`API error ${response.status}: ${errorText}`);
+      throw new Error(`API ${response.status}: ${errorText}`);
     }
 
     const result: ReceiptResponse = await response.json();
@@ -86,20 +127,13 @@ export async function processReceiptWithAPI(
 
     return result;
   } catch (error: any) {
-    // Handle timeout (likely cold start)
-    if (error.name === "AbortError" && retryOnTimeout) {
-      console.log(
-        "⏰ Request timeout - server might be waking up, retrying...",
-      );
-      // Retry once without timeout handling
-      return processReceiptWithAPI(imageUri, false);
-    }
+    const msg = error?.message || String(error);
+    console.warn(`⚠️ BizWise API attempt ${attempt} failed: ${msg}`);
 
-    // Handle connection errors
-    if (error.message.includes("Network request failed")) {
-      throw new Error(
-        "Cannot connect to receipt processing server. Is it running?",
-      );
+    // Retry once on timeout or network errors
+    if (attempt < MAX_ATTEMPTS) {
+      console.log("🔄 Retrying…");
+      return processReceiptWithAPI(imageUri, attempt + 1);
     }
 
     throw error;
