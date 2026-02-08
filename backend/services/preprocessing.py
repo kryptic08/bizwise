@@ -40,7 +40,7 @@ class ImagePreprocessor:
     #  Resize to sane dimensions
     # ------------------------------------------------------------------ #
     @staticmethod
-    def resize_for_ocr(image: np.ndarray, max_width: int = 2400) -> np.ndarray:
+    def resize_for_ocr(image: np.ndarray, max_width: int = 2000) -> np.ndarray:
         """
         Resize so longest side ≤ max_width while keeping aspect ratio.
         Upscale tiny images for better OCR on handwriting.
@@ -67,11 +67,13 @@ class ImagePreprocessor:
     def deskew(image: np.ndarray) -> np.ndarray:
         """Correct rotation by detecting dominant text-line angle."""
         try:
-            # Detect edges
-            edges = cv2.Canny(image, 50, 150, apertureSize=3)
-            lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
-                                    threshold=100, minLineLength=60,
-                                    maxLineGap=10)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+            lines = cv2.HoughLinesP(
+                edges, 1, np.pi / 180,
+                threshold=100, minLineLength=60,
+                maxLineGap=10,
+            )
             if lines is None or len(lines) == 0:
                 return image
 
@@ -79,7 +81,7 @@ class ImagePreprocessor:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
                 angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-                if abs(angle) < 30:          # only near-horizontal lines
+                if abs(angle) < 30:  # only near-horizontal lines
                     angles.append(angle)
 
             if not angles:
@@ -91,9 +93,11 @@ class ImagePreprocessor:
 
             (h, w) = image.shape[:2]
             M = cv2.getRotationMatrix2D((w // 2, h // 2), median_angle, 1.0)
-            rotated = cv2.warpAffine(image, M, (w, h),
-                                     flags=cv2.INTER_CUBIC,
-                                     borderMode=cv2.BORDER_REPLICATE)
+            rotated = cv2.warpAffine(
+                image, M, (w, h),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
             logger.info(f"Deskewed image by {median_angle:.1f}°")
             return rotated
         except Exception as e:
@@ -121,9 +125,11 @@ class ImagePreprocessor:
     @staticmethod
     def preprocess_printed(image: np.ndarray) -> np.ndarray:
         try:
-            denoised = cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 15)
-            gray = cv2.cvtColor(denoised, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # Fast denoise for receipts (faster than colored NLM)
+            gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
             gray = ImagePreprocessor.enhance_contrast(gray)
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
             thresh = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                 cv2.THRESH_BINARY, 31, 15,
@@ -141,7 +147,7 @@ class ImagePreprocessor:
         try:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             # Bilateral filter preserves edges (ink strokes)
-            gray = cv2.bilateralFilter(gray, 9, 75, 75)
+            gray = cv2.bilateralFilter(gray, 7, 50, 50)
             gray = ImagePreprocessor.enhance_contrast(gray)
             gray = ImagePreprocessor.sharpen(gray)
             # Otsu binarization works better for handwriting
@@ -185,34 +191,7 @@ class ImagePreprocessor:
         original = self.resize_for_ocr(original)
 
         # Deskew on the colour image before splitting into strategies
-        deskewed = self.deskew(
-            cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
-        )
-        # Reconstruct a colour version for the per-strategy pipelines
-        deskewed_bgr = original.copy()
-        # Apply the same rotation to the colour image
-        try:
-            edges = cv2.Canny(deskewed, 50, 150, apertureSize=3)
-            lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
-                                    threshold=100, minLineLength=60,
-                                    maxLineGap=10)
-            if lines is not None:
-                angles = [np.degrees(np.arctan2(
-                    l[0][3] - l[0][1], l[0][2] - l[0][0]))
-                    for l in lines if abs(np.degrees(np.arctan2(
-                        l[0][3] - l[0][1], l[0][2] - l[0][0]))) < 30]
-                if angles:
-                    med = float(np.median(angles))
-                    if abs(med) >= 0.3:
-                        h, w = original.shape[:2]
-                        M = cv2.getRotationMatrix2D(
-                            (w // 2, h // 2), med, 1.0)
-                        deskewed_bgr = cv2.warpAffine(
-                            original, M, (w, h),
-                            flags=cv2.INTER_CUBIC,
-                            borderMode=cv2.BORDER_REPLICATE)
-        except Exception:
-            pass
+        deskewed_bgr = self.deskew(original)
 
         variants = [
             self.preprocess_printed(deskewed_bgr),

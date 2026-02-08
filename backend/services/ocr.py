@@ -33,17 +33,15 @@ class OCRService:
     # -------------------------------------------------------------- #
     #  Tesseract – receipt-optimised PSM + OEM
     # -------------------------------------------------------------- #
-    def _run_tesseract(self, image: np.ndarray) -> Tuple[str, float]:
-        """Run Tesseract with receipt-friendly config and return (text, conf)."""
+    def _run_tesseract(self, image: np.ndarray, config: str) -> Tuple[str, float, int]:
+        """Run Tesseract with receipt-friendly config and return (text, conf, words)."""
         if not self.tesseract_available:
             raise RuntimeError("Tesseract is not available")
-
-        custom_config = r"--oem 3 --psm 6"
 
         data = self.pytesseract.image_to_data(
             image,
             output_type=self.pytesseract.Output.DICT,
-            config=custom_config,
+            config=config,
         )
 
         lines: Dict[int, List[str]] = {}
@@ -64,8 +62,7 @@ class OCRService:
             " ".join(words) for _, words in sorted(lines.items())
         )
         avg_conf = (sum(confidences) / len(confidences) / 100) if confidences else 0.0
-
-        return full_text, avg_conf
+        return full_text, avg_conf, len(confidences)
 
     # -------------------------------------------------------------- #
     #  Public API – multi-variant scoring
@@ -95,18 +92,39 @@ class OCRService:
         best_text = ""
         best_conf = -1.0
 
+        # Primary OCR configs (try fast config first, fallback only when needed)
+        primary_config = r"--oem 3 --psm 6 -c preserve_interword_spaces=1"
+        fallback_config = r"--oem 3 --psm 4 -c preserve_interword_spaces=1"
+
         for idx, img in enumerate(variants):
             try:
-                text, conf = self._run_tesseract(img)
+                text, conf, word_hits = self._run_tesseract(img, primary_config)
                 word_count = len(text.split())
                 logger.info(
                     f"  variant {idx}: {word_count} words, "
                     f"confidence {conf:.2f}"
                 )
+
+                # If result looks weak, try a different page segmentation
+                if conf < 0.45 or word_count < 8:
+                    alt_text, alt_conf, _ = self._run_tesseract(
+                        img, fallback_config
+                    )
+                    alt_words = len(alt_text.split())
+                    alt_score = alt_conf * (1.0 + min(alt_words / 100, 1.0))
+                    score = conf * (1.0 + min(word_count / 100, 1.0))
+                    if alt_score > score:
+                        text, conf, word_count = alt_text, alt_conf, alt_words
+
                 score = conf * (1.0 + min(word_count / 100, 1.0))
                 if score > best_conf:
                     best_conf = score
                     best_text = text
+
+                # Early exit if we already have a strong result
+                if conf >= 0.80 and word_count >= 20:
+                    logger.info("  early-stop: high-confidence OCR")
+                    break
             except Exception as e:
                 logger.warning(f"  variant {idx} failed: {e}")
 
