@@ -4,6 +4,7 @@ import { CameraView, FlashMode, useCameraPermissions } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { useRouter } from "expo-router";
+import LottieView from "lottie-react-native";
 import {
   ArrowLeft,
   Camera,
@@ -43,9 +44,19 @@ const COLORS = {
 const OCR_API_URL = "https://api.ocr.space/parse/image";
 const OCR_API_KEY = process.env.EXPO_PUBLIC_OCR_API_KEY!;
 
-// Google Gemini AI for direct parsing (faster than backend proxy)
+// Google Gemini AI for direct parsing (primary)
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY!;
-const GEMINI_MODEL = "gemini-2.5-flash-lite";
+const GEMINI_MODEL = "gemini-flash-lite-latest";
+
+// OpenRouter AI fallback chain (all free models)
+const OPENROUTER_API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY!;
+const OPENROUTER_MODELS = [
+  "meta-llama/llama-3.3-70b-instruct:free", // Best free model - try first after Gemini
+  "qwen/qwen3-32b:free", // GPT-class OSS
+  "meta-llama/llama-4-scout:free", // Llama scout
+  "deepseek/deepseek-r1-0528:free", // DeepSeek reasoning
+  "openrouter/free", // Auto-rotate all free models
+];
 
 interface ExpenseItem {
   id: string;
@@ -82,6 +93,10 @@ export default function AddExpenseScreen() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showCameraView, setShowCameraView] = useState(false);
   const [flashMode, setFlashMode] = useState<FlashMode>("off");
+  const [showScanAnimation, setShowScanAnimation] = useState(false);
+  const [scanComplete, setScanComplete] = useState(false);
+  const [scanError, setScanError] = useState(false);
+  const lottieRef = useRef<LottieView>(null);
 
   const getCurrentDate = () => {
     const date = new Date();
@@ -178,7 +193,7 @@ export default function AddExpenseScreen() {
                 items,
                 receiptImage: capturedImage || undefined,
                 ocrText: ocrText || undefined,
-                userId: user?.userId,
+                userId: user?.userId!,
                 clientTimestamp: Date.now(), // Pass device timestamp
               });
 
@@ -247,6 +262,10 @@ export default function AddExpenseScreen() {
 
   const processImageWithOCR = async (imageUri: string) => {
     setIsProcessing(true);
+    setShowScanAnimation(true);
+    setScanComplete(false);
+    setScanError(false);
+
     try {
       console.log("Processing image URI:", imageUri);
 
@@ -301,7 +320,7 @@ export default function AddExpenseScreen() {
         result.ParsedResults[0] &&
         result.ParsedResults[0].ParsedText
       ) {
-        extractedText = result.ParsedResults[0].ParsedText;
+        extractedText = result.ParsedResults[0].ParsedText.trim();
         console.log("✅ OCR.space extracted text successfully");
       } else if (result.ErrorMessage && result.ErrorMessage.length > 0) {
         throw new Error(`OCR.space error: ${result.ErrorMessage[0]}`);
@@ -314,44 +333,31 @@ export default function AddExpenseScreen() {
       console.log("Extracted text:", extractedText);
       setOcrText(extractedText);
 
+      // Check if text is empty or too short to be a receipt
+      if (!extractedText || extractedText.length < 10) {
+        console.log("❌ No meaningful text found in image");
+        setScanError(true);
+        return; // Stop processing, don't send to AI
+      }
+
       // ── Gemini AI: Parse the OCR text into structured items ──
       await parseReceiptWithAI(extractedText);
     } catch (error) {
       console.error("OCR Error:", (error as Error).message);
 
-      // Fallback to mock data if API fails
-      const mockText = await simulateAdvancedOCR();
-      setOcrText(mockText);
-      await parseReceiptWithAI(mockText);
-
-      Alert.alert(
-        "OCR Notice",
-        "Using demo mode. Error: " + (error as Error).message,
-        [{ text: "OK" }],
-      );
+      // Show error animation for OCR failures
+      setScanError(true);
+      setIsProcessing(false);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Parse receipt text using Gemini AI directly
-  const parseReceiptWithAI = async (text: string) => {
-    console.log("Parsing receipt with Gemini AI...");
+  // Receipt parsing prompt (shared between Gemini and OpenRouter)
+  const getReceiptPrompt = (text: string) =>
+    `You are an expert at parsing receipt text from the Philippines. Extract ONLY items that are clearly visible in the receipt.
 
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `You are an expert at parsing receipt text from the Philippines. Analyze the following receipt text and extract all purchased items.
+IMPORTANT: DO NOT MAKE UP, INVENT, OR HALLUCINATE ANY ITEMS. Only extract what you actually see in the text.
 
 For each item found, provide:
 1. title: The name of the item (clean it up, capitalize properly)
@@ -359,110 +365,165 @@ For each item found, provide:
 3. quantity: How many were purchased (default to 1 if not specified)
 4. category: One of these categories: Food, Office, Transportation, Utilities, Maintenance, Marketing, Medical, Equipment, General
 
-IMPORTANT RULES FOR PHILIPPINE RECEIPTS:
+CRITICAL RULES FOR PHILIPPINE RECEIPTS:
+- Each item appears on ONE LINE ONLY in receipts - DO NOT combine multiple lines into one item name
+- Item format is: "ITEM NAME - PRICE" or "ITEM NAME PRICE" on a SINGLE line
+- If you see text on separate lines, they are SEPARATE items, not one item
 - Many receipts are HANDWRITTEN and may not have PHP/₱ symbols
 - Amounts like "2345" or "1500" are Philippine pesos (don't divide by 100, use as-is)
 - Common price patterns: "2345" = ₱2,345.00, "150" = ₱150.00, "15.50" = ₱15.50
 - If amount has no decimal point and is 2+ digits, treat it as whole pesos
-- Only extract actual purchased items, NOT totals, subtotals, change, tax, VAT, discounts
+- ONLY extract actual purchased items, NOT totals, subtotals, change, tax, VAT, discounts
 - Skip store names, addresses, dates, times, receipt numbers, cashier names
 - If you see "x2" or "x 3" or "qty: 2", that's the quantity
 - The amount should be the UNIT price, not the line total
 - For handwritten receipts, be lenient with OCR errors ("S" might be "5", "O" might be "0")
 - If unsure about category, use "General"
-- Return ONLY valid JSON array, no other text
+- If you cannot clearly identify items, return empty array []
+- DO NOT include items that look like: TOTAL, SUBTOTAL, CHANGE, CASH, PAYMENT, TAX, VAT, DISCOUNT
+- Return ONLY valid JSON array, no markdown code blocks, no explanations, no other text
 
 Receipt text:
 """
 ${text}
 """
 
-Return a JSON array like this (no markdown, just raw JSON):
+Return ONLY a JSON array (raw JSON, no code blocks, no markdown):
 [{"title": "Sisig", "amount": 150, "quantity": 1, "category": "Food"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Food"}]
 
-If no items found, return: []`,
-                  },
-                ],
-              },
-            ],
-            generationConfig: {
-              temperature: 0.1,
-              maxOutputTokens: 2048,
-            },
-          }),
-        },
-      );
+If no items found or text is unclear, return: []`;
 
-      console.log("Gemini API response status:", response.status);
+  // Extract items from AI response text
+  const extractItemsFromAIResponse = (aiResponse: string): any[] | null => {
+    const cleanedResponse = aiResponse
+      .replace(/```json\n/g, "")
+      .replace(/```\n/g, "")
+      .replace(/```/g, "")
+      .replace(/<think>[\s\S]*?<\/think>/g, "") // Remove DeepSeek thinking tags
+      .trim();
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log("Gemini API error:", errorText);
-        throw new Error(`Gemini API error: ${response.status}`);
-      }
+    const jsonMatch = cleanedResponse.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return null;
 
-      const result = await response.json();
-      console.log("Gemini API result:", JSON.stringify(result, null, 2));
-
-      const aiResponse =
-        result.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-      if (!aiResponse) {
-        console.log("No response from Gemini AI");
-        throw new Error("No AI response");
-      }
-
-      // Extract JSON from AI response (remove markdown code blocks if present)
-      const cleanedResponse = aiResponse
-        .replace(/```json\n/g, "")
-        .replace(/```\n/g, "")
-        .replace(/```/g, "")
-        .trim();
-
-      const jsonMatch = cleanedResponse.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.log("Could not find JSON array in AI response");
-        throw new Error("Invalid AI response format");
-      }
-
+    try {
       const items = JSON.parse(jsonMatch[0]);
+      return Array.isArray(items) ? items : null;
+    } catch {
+      return null;
+    }
+  };
 
-      if (Array.isArray(items) && items.length > 0) {
-        const newExpenses: ExpenseItem[] = items.map((item: any) => ({
-          id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-          category: item.category || "General",
-          title: item.title || "Unknown Item",
-          amount: parseFloat(item.amount || 0).toFixed(2),
-          quantity: (item.quantity || 1).toString(),
-          total: (parseFloat(item.amount || 0) * (item.quantity || 1)).toFixed(
-            2,
-          ),
-        }));
+  // Try Gemini AI first
+  const tryGemini = async (text: string): Promise<any[] | null> => {
+    console.log("Trying Gemini AI...");
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: getReceiptPrompt(text) }] }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+        }),
+      },
+    );
 
-        setExpenses(newExpenses);
+    if (!response.ok) throw new Error(`Gemini error: ${response.status}`);
 
-        // Auto-close the modal after successful processing
-        setTimeout(() => {
-          closeOCRView();
-        }, 500);
+    const result = await response.json();
+    const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    return extractItemsFromAIResponse(aiText);
+  };
 
-        Alert.alert(
-          "Receipt Processed",
-          `Found ${newExpenses.length} item(s). Review and adjust the details below.`,
-          [{ text: "OK" }],
-        );
-      } else {
-        // Fallback to regex parsing if Gemini returns no items
-        console.log(
-          "Gemini returned no items, falling back to regex parsing...",
-        );
-        parseReceiptText(text);
+  // Try OpenRouter AI with a specific model
+  const tryOpenRouterModel = async (
+    text: string,
+    model: string,
+  ): Promise<any[] | null> => {
+    console.log(`Trying OpenRouter: ${model}...`);
+    const response = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "HTTP-Referer": "https://bizwise.app",
+          "X-Title": "BizWise Expense Manager",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "user",
+              content: getReceiptPrompt(text),
+            },
+          ],
+          temperature: 0.1,
+          max_tokens: 2048,
+        }),
+      },
+    );
+
+    if (!response.ok)
+      throw new Error(`OpenRouter ${model}: ${response.status}`);
+
+    const result = await response.json();
+    const aiText = result.choices?.[0]?.message?.content || "";
+    return extractItemsFromAIResponse(aiText);
+  };
+
+  // Parse receipt text using AI with fallback chain:
+  // Gemini → Nemotron → Qwen → Llama → DeepSeek → openrouter/free → regex
+  const parseReceiptWithAI = async (text: string) => {
+    console.log("Parsing receipt with AI...");
+
+    let items: any[] | null = null;
+
+    // 1. Try Gemini first (fastest)
+    try {
+      items = await tryGemini(text);
+      if (items && items.length > 0) {
+        console.log(`✅ Gemini parsed ${items.length} items`);
       }
-    } catch (error) {
-      console.error("Gemini AI parsing error:", error);
-      console.log("Falling back to regex parsing...");
-      // Fallback to traditional regex parsing
-      parseReceiptText(text);
+    } catch (e) {
+      console.warn("❌ Gemini failed:", e);
+    }
+
+    // 2. Try OpenRouter models in order until one works
+    if (!items || items.length === 0) {
+      for (const model of OPENROUTER_MODELS) {
+        try {
+          items = await tryOpenRouterModel(text, model);
+          if (items && items.length > 0) {
+            console.log(`✅ ${model} parsed ${items.length} items`);
+            break;
+          }
+        } catch (e) {
+          console.warn(`❌ ${model} failed:`, e);
+        }
+      }
+    }
+
+    // Process items if any AI succeeded
+    if (items && items.length > 0) {
+      const newExpenses: ExpenseItem[] = items.map((item: any) => ({
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        category: item.category || "General",
+        title: item.title || "Unknown Item",
+        amount: parseFloat(item.amount || 0).toFixed(2),
+        quantity: (item.quantity || 1).toString(),
+        total: (parseFloat(item.amount || 0) * (item.quantity || 1)).toFixed(2),
+      }));
+
+      setExpenses(newExpenses);
+
+      // Show success animation (user will click View Items button)
+      setScanComplete(true);
+    } else {
+      // All AI failed, show error animation (user will click Retake Photo button)
+      console.log("All AI parsers failed, showing error animation...");
+      setScanError(true);
     }
   };
 
@@ -1115,6 +1176,23 @@ TOTAL: ₱615.00`,
     setOcrText("");
   };
 
+  const retakePhoto = () => {
+    setShowScanAnimation(false);
+    setScanComplete(false);
+    setScanError(false);
+    setShowCamera(false);
+    setCapturedImage(null);
+    setOcrText("");
+    setShowCameraView(true);
+  };
+
+  const viewItems = () => {
+    setShowScanAnimation(false);
+    setScanComplete(false);
+    setScanError(false);
+    closeOCRView();
+  };
+
   const clearScan = () => {
     Alert.alert(
       "Clear Scan",
@@ -1450,6 +1528,67 @@ TOTAL: ₱615.00`,
             >
               <Text style={styles.acceptButtonText}>Accept</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Scanning Animation Modal */}
+      <Modal
+        visible={showScanAnimation}
+        transparent={true}
+        animationType="fade"
+      >
+        <View style={styles.animationModalOverlay}>
+          <View style={styles.animationContainer}>
+            <LottieView
+              ref={lottieRef}
+              source={
+                scanError
+                  ? require("../../assets/animations/Error Occurred!.json")
+                  : scanComplete
+                    ? require("../../assets/animations/Check Animation.json")
+                    : require("../../assets/animations/Document OCR Scan.json")
+              }
+              autoPlay
+              loop={!scanComplete && !scanError}
+              style={styles.lottieAnimation}
+            />
+            <Text style={styles.animationText}>
+              {scanError
+                ? "OCR Failed"
+                : scanComplete
+                  ? "Receipt Processed!"
+                  : "Scanning Receipt..."}
+            </Text>
+            {scanError && (
+              <Text style={styles.animationSubText}>
+                Could not process the image.{"\n"}Please try again with a
+                clearer photo.
+              </Text>
+            )}
+            {scanComplete && (
+              <Text style={styles.animationSubText}>
+                Items detected successfully.{"\n"}Review and adjust as needed.
+              </Text>
+            )}
+
+            {/* Show button when animation completes (error or success) */}
+            {scanError && (
+              <TouchableOpacity
+                style={styles.animationButton}
+                onPress={retakePhoto}
+              >
+                <Text style={styles.animationButtonText}>Retake Photo</Text>
+              </TouchableOpacity>
+            )}
+            {scanComplete && (
+              <TouchableOpacity
+                style={styles.animationButton}
+                onPress={viewItems}
+              >
+                <Text style={styles.animationButtonText}>View Items</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -1953,5 +2092,50 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     backgroundColor: COLORS.primaryBlue,
+  },
+  animationModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.8)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  animationContainer: {
+    backgroundColor: COLORS.white,
+    borderRadius: 20,
+    padding: 30,
+    alignItems: "center",
+    width: 300,
+  },
+  lottieAnimation: {
+    width: 200,
+    height: 200,
+  },
+  animationText: {
+    marginTop: 20,
+    fontSize: 18,
+    fontWeight: "600",
+    color: COLORS.textDark,
+    textAlign: "center",
+  },
+  animationSubText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: COLORS.textGray,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  animationButton: {
+    marginTop: 20,
+    backgroundColor: COLORS.primaryBlue,
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 25,
+    minWidth: 200,
+  },
+  animationButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: "600",
+    textAlign: "center",
   },
 });
