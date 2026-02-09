@@ -91,17 +91,23 @@ export default function EditProfileScreen() {
       // Upload to Convex and save
       try {
         const profilePictureStorageId = await uploadImageToConvex(imageUri);
-        await updateProfilePictureMutation({
+        const updateResult = await updateProfilePictureMutation({
           userId: user!.userId,
           profilePictureStorageId,
           profilePicture: imageUri,
         });
 
-        // Update local auth context
+        // Use the resolved URL from the backend
+        const resolvedUrl = updateResult.profilePicture;
+
+        // Update local auth context with resolved URL
         await login({
           ...user!,
-          profilePicture: imageUri,
+          profilePicture: resolvedUrl,
         });
+
+        // Update local state
+        setProfilePicture(resolvedUrl);
       } catch (error: any) {
         console.error("Error updating profile picture:", error);
         Alert.alert("Error", "Failed to update profile picture");

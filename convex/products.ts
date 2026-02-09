@@ -5,20 +5,37 @@ import { mutation, query } from "./_generated/server";
 export const getProducts = query({
   args: { userId: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
+    let products;
     if (args.userId) {
-      return await ctx.db
+      products = await ctx.db
         .query("products")
         .withIndex("by_user", (q) => q.eq("userId", args.userId))
         .filter((q) => q.eq(q.field("isActive"), true))
         .order("desc")
         .collect();
+    } else {
+      // Fallback for legacy data without userId
+      products = await ctx.db
+        .query("products")
+        .filter((q) => q.eq(q.field("isActive"), true))
+        .order("desc")
+        .collect();
     }
-    // Fallback for legacy data without userId
-    return await ctx.db
-      .query("products")
-      .filter((q) => q.eq(q.field("isActive"), true))
-      .order("desc")
-      .collect();
+
+    // Resolve image URLs from storage IDs
+    return await Promise.all(
+      products.map(async (product) => {
+        let imageUrl = product.image;
+        if (product.imageStorageId) {
+          imageUrl =
+            (await ctx.storage.getUrl(product.imageStorageId)) || product.image;
+        }
+        return {
+          ...product,
+          image: imageUrl,
+        };
+      }),
+    );
   },
 });
 
@@ -29,20 +46,37 @@ export const getProductsByCategory = query({
     userId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
+    let products;
     if (args.userId) {
-      return await ctx.db
+      products = await ctx.db
         .query("products")
         .withIndex("by_user_category", (q) =>
           q.eq("userId", args.userId).eq("category", args.category),
         )
         .filter((q) => q.eq(q.field("isActive"), true))
         .collect();
+    } else {
+      products = await ctx.db
+        .query("products")
+        .withIndex("by_category", (q) => q.eq("category", args.category))
+        .filter((q) => q.eq(q.field("isActive"), true))
+        .collect();
     }
-    return await ctx.db
-      .query("products")
-      .withIndex("by_category", (q) => q.eq("category", args.category))
-      .filter((q) => q.eq(q.field("isActive"), true))
-      .collect();
+
+    // Resolve image URLs from storage IDs
+    return await Promise.all(
+      products.map(async (product) => {
+        let imageUrl = product.image;
+        if (product.imageStorageId) {
+          imageUrl =
+            (await ctx.storage.getUrl(product.imageStorageId)) || product.image;
+        }
+        return {
+          ...product,
+          image: imageUrl,
+        };
+      }),
+    );
   },
 });
 

@@ -52,13 +52,21 @@ export const loginUser = mutation({
       throw new Error("Invalid email or password");
     }
 
+    // Resolve profile picture URL if storage ID exists
+    let profilePictureUrl = user.profilePicture;
+    if (user.profilePictureStorageId) {
+      profilePictureUrl =
+        (await ctx.storage.getUrl(user.profilePictureStorageId)) ||
+        user.profilePicture;
+    }
+
     return {
       userId: user._id,
       email: user.email,
       name: user.name,
       phone: user.phone,
       pin: user.pin,
-      profilePicture: user.profilePicture,
+      profilePicture: profilePictureUrl,
     };
   },
 });
@@ -70,6 +78,14 @@ export const getUser = query({
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
 
+    // Resolve profile picture URL if storage ID exists
+    let profilePictureUrl = user.profilePicture;
+    if (user.profilePictureStorageId) {
+      profilePictureUrl =
+        (await ctx.storage.getUrl(user.profilePictureStorageId)) ||
+        user.profilePicture;
+    }
+
     // Don't return password
     return {
       _id: user._id,
@@ -77,6 +93,7 @@ export const getUser = query({
       name: user.name,
       phone: user.phone,
       createdAt: user.createdAt,
+      profilePicture: profilePictureUrl,
     };
   },
 });
@@ -118,6 +135,15 @@ export const updateUser = mutation({
 
     // Return updated user data
     const user = await ctx.db.get(userId);
+
+    // Resolve profile picture URL if storage ID exists
+    let profilePictureUrl = user?.profilePicture;
+    if (user?.profilePictureStorageId) {
+      profilePictureUrl =
+        (await ctx.storage.getUrl(user.profilePictureStorageId)) ||
+        user.profilePicture;
+    }
+
     return {
       success: true,
       user: user
@@ -126,6 +152,7 @@ export const updateUser = mutation({
             email: user.email,
             name: user.name,
             phone: user.phone,
+            profilePicture: profilePictureUrl,
           }
         : null,
     };
@@ -300,6 +327,18 @@ export const updateProfilePicture = mutation({
       profilePictureStorageId: args.profilePictureStorageId,
       profilePicture: args.profilePicture,
     });
-    return { success: true };
+
+    // Resolve and return the profile picture URL
+    let profilePictureUrl = args.profilePicture;
+    if (args.profilePictureStorageId) {
+      profilePictureUrl =
+        (await ctx.storage.getUrl(args.profilePictureStorageId)) ||
+        args.profilePicture;
+    }
+
+    return {
+      success: true,
+      profilePicture: profilePictureUrl,
+    };
   },
 });

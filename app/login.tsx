@@ -126,22 +126,34 @@ export default function LoginScreen() {
         });
 
         // If profile picture was selected, upload it to Convex
-        let profilePictureStorageId = undefined;
         if (profilePicture) {
-          profilePictureStorageId = await uploadImageToConvex(profilePicture);
+          const profilePictureStorageId =
+            await uploadImageToConvex(profilePicture);
           await updateProfilePictureMutation({
             userId: result.userId,
             profilePictureStorageId,
             profilePicture: profilePicture,
           });
-        }
 
-        await login({
-          userId: result.userId,
-          email: result.email,
-          name: name,
-          profilePicture: profilePicture || undefined,
-        });
+          // Re-login to get resolved profile picture URL from backend
+          const updatedResult = await loginUser({
+            email,
+            password,
+          });
+          await login({
+            userId: updatedResult.userId,
+            email: updatedResult.email,
+            name: updatedResult.name,
+            profilePicture: updatedResult.profilePicture,
+          });
+        } else {
+          await login({
+            userId: result.userId,
+            email: result.email,
+            name: name,
+            profilePicture: undefined,
+          });
+        }
         // New users should set up PIN
         router.replace("/pin-setup");
       } else {
