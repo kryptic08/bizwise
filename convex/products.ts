@@ -53,6 +53,7 @@ export const addProduct = mutation({
     name: v.string(),
     category: v.string(),
     price: v.number(),
+    imageStorageId: v.optional(v.id("_storage")),
     image: v.string(),
   },
   handler: async (ctx, args) => {
@@ -61,6 +62,7 @@ export const addProduct = mutation({
       name: args.name,
       category: args.category,
       price: args.price,
+      imageStorageId: args.imageStorageId,
       image: args.image,
       isActive: true,
       createdAt: Date.now(),
@@ -76,6 +78,7 @@ export const updateProduct = mutation({
     name: v.optional(v.string()),
     category: v.optional(v.string()),
     price: v.optional(v.number()),
+    imageStorageId: v.optional(v.id("_storage")),
     image: v.optional(v.string()),
     isActive: v.optional(v.boolean()),
   },

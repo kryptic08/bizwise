@@ -49,6 +49,7 @@ export default function EditItemScreen() {
   // Mutations
   const updateProduct = useMutation(api.products.updateProduct);
   const deleteProduct = useMutation(api.products.deleteProduct);
+  const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -118,6 +119,26 @@ export default function EditItemScreen() {
     ]);
   };
 
+  const uploadImageToConvex = async (imageUri: string) => {
+    try {
+      const uploadUrl = await generateUploadUrl();
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+
+      const result = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": blob.type },
+        body: blob,
+      });
+
+      const { storageId } = await result.json();
+      return storageId;
+    } catch (error) {
+      console.error("Error uploading image to Convex:", error);
+      return null;
+    }
+  };
+
   const handleSave = async () => {
     if (!formData.name || !formData.category || !formData.price) {
       Alert.alert("Error", "Please fill in all required fields");
@@ -131,11 +152,18 @@ export default function EditItemScreen() {
 
     setIsLoading(true);
     try {
+      // Upload new image to Convex if changed and is local URI
+      let imageStorageId = undefined;
+      if (formData.image && formData.image.startsWith("file://")) {
+        imageStorageId = await uploadImageToConvex(formData.image);
+      }
+
       await updateProduct({
         id: id as any,
         name: formData.name,
         category: formData.category,
         price: parseFloat(formData.price),
+        imageStorageId,
         image: formData.image,
       });
 

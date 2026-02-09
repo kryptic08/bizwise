@@ -6,6 +6,8 @@ import React, { useState } from "react";
 import {
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -33,6 +35,7 @@ export default function EditProfileScreen() {
   const updateProfilePictureMutation = useMutation(
     api.users.updateProfilePicture,
   );
+  const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
   const [formData, setFormData] = useState({
     name: user?.name || "",
@@ -42,6 +45,26 @@ export default function EditProfileScreen() {
     user?.profilePicture || null,
   );
   const [isLoading, setIsLoading] = useState(false);
+
+  const uploadImageToConvex = async (imageUri: string) => {
+    try {
+      const uploadUrl = await generateUploadUrl();
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+
+      const result = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": blob.type },
+        body: blob,
+      });
+
+      const { storageId } = await result.json();
+      return storageId;
+    } catch (error) {
+      console.error("Error uploading image to Convex:", error);
+      return null;
+    }
+  };
 
   const handlePickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -65,10 +88,12 @@ export default function EditProfileScreen() {
       const imageUri = result.assets[0].uri;
       setProfilePicture(imageUri);
 
-      // Save immediately
+      // Upload to Convex and save
       try {
+        const profilePictureStorageId = await uploadImageToConvex(imageUri);
         await updateProfilePictureMutation({
           userId: user!.userId,
+          profilePictureStorageId,
           profilePicture: imageUri,
         });
 
@@ -134,7 +159,10 @@ export default function EditProfileScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
       <StatusBar
         barStyle="light-content"
         backgroundColor={COLORS.primaryBlue}
@@ -234,14 +262,14 @@ export default function EditProfileScreen() {
           </Text>
         </TouchableOpacity>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.primaryBlue,
+    backgroundColor: COLORS.lightBlueBg,
   },
   header: {
     flexDirection: "row",
@@ -277,6 +305,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 20,
     paddingTop: 30,
+    flexGrow: 1,
   },
   profilePictureContainer: {
     alignItems: "center",
@@ -344,8 +373,13 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     fontSize: 15,
     color: COLORS.textDark,
-    borderWidth: 1,
-    borderColor: COLORS.borderGray,
+    borderWidth: 2,
+    borderColor: COLORS.primaryBlue,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   disabledInput: {
     backgroundColor: "#f3f4f6",

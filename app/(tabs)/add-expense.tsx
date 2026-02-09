@@ -73,8 +73,9 @@ export default function AddExpenseScreen() {
   const cameraRef = useRef<CameraView>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
-  // Convex mutation for adding expenses (grouped)
+  // Convex mutations
   const addExpenseGroup = useMutation(api.expenses.addExpenseGroup);
+  const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
   const [expenses, setExpenses] = useState<ExpenseItem[]>([
     {
@@ -151,6 +152,30 @@ export default function AddExpenseScreen() {
     );
   };
 
+  const uploadImageToConvex = async (imageUri: string) => {
+    try {
+      // Get upload URL from Convex
+      const uploadUrl = await generateUploadUrl();
+
+      // Read the file as blob
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+
+      // Upload to Convex storage
+      const result = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": blob.type },
+        body: blob,
+      });
+
+      const { storageId } = await result.json();
+      return storageId;
+    } catch (error) {
+      console.error("Error uploading image to Convex:", error);
+      return null;
+    }
+  };
+
   const handleSave = async () => {
     // Validate expenses
     const validExpenses = expenses.filter(
@@ -181,6 +206,7 @@ export default function AddExpenseScreen() {
           onPress: async () => {
             setIsSaving(true);
             try {
+              // Note: Receipt images are only used for OCR, not stored in Convex to save storage
               // Save all expenses as a single grouped transaction
               const items = validExpenses.map((expense) => ({
                 category: expense.category || "General",
@@ -191,8 +217,7 @@ export default function AddExpenseScreen() {
 
               await addExpenseGroup({
                 items,
-                receiptImage: capturedImage || undefined,
-                ocrText: ocrText || undefined,
+                ocrText: ocrText || undefined, // Only store OCR text, not the image
                 userId: user?.userId!,
                 clientTimestamp: Date.now(), // Pass device timestamp
               });

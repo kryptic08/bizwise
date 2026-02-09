@@ -70,6 +70,12 @@ export default function HomeScreen() {
     return "Good Evening";
   };
 
+  // Convert text to sentence case
+  const toSentenceCase = (text: string) => {
+    if (!text) return text;
+    return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+  };
+
   // Fetch financial data from Convex
   const financialSummary = useQuery(
     api.analytics.getFinancialSummary,
@@ -310,9 +316,11 @@ export default function HomeScreen() {
                 <Utensils color={COLORS.white} size={16} />
               </View>
               <View>
-                <Text style={styles.highlightLabel}>Top Selling Product</Text>
+                <Text style={styles.highlightLabel}>Top selling product</Text>
                 <Text style={styles.highlightValue}>
-                  {topProduct?.name || "Loading..."}
+                  {topProduct?.name
+                    ? toSentenceCase(topProduct.name)
+                    : "No sales yet"}
                 </Text>
               </View>
             </View>
@@ -322,9 +330,11 @@ export default function HomeScreen() {
                 <LayoutGrid color={COLORS.white} size={16} />
               </View>
               <View>
-                <Text style={styles.highlightLabel}>Top Selling Category</Text>
+                <Text style={styles.highlightLabel}>Top selling category</Text>
                 <Text style={styles.highlightValue}>
-                  {topCategory?.name || "Loading..."}
+                  {topCategory?.name
+                    ? toSentenceCase(topCategory.name)
+                    : "No sales yet"}
                 </Text>
               </View>
             </View>

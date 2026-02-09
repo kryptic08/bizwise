@@ -1,5 +1,5 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
   ArrowDownRight,
@@ -71,11 +71,6 @@ export default function TransactionScreen() {
   const financialSummary = useQuery(
     api.analytics.getFinancialSummary,
     user?.userId ? { userId: user.userId } : "skip",
-  );
-
-  // Seed sample transactions mutation
-  const seedTransactions = useMutation(
-    api.seedTransactions.seedSampleTransactions,
   );
 
   const [filterType, setFilterType] = useState<TransactionType | "all">("all");
@@ -344,23 +339,6 @@ export default function TransactionScreen() {
                 {combinedTransactions !== undefined &&
                   "Start making sales or adding expenses to see them here."}
               </Text>
-              {combinedTransactions !== undefined && (
-                <TouchableOpacity
-                  style={styles.seedButton}
-                  onPress={async () => {
-                    try {
-                      const result = await seedTransactions();
-                      console.log("Seed result:", result);
-                    } catch (error) {
-                      console.error("Error seeding transactions:", error);
-                    }
-                  }}
-                >
-                  <Text style={styles.seedButtonText}>
-                    Add Sample Transactions
-                  </Text>
-                </TouchableOpacity>
-              )}
             </View>
           )}
         />

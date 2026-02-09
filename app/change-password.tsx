@@ -4,6 +4,8 @@ import { ArrowLeft, Eye, EyeOff } from "lucide-react-native";
 import React, { useState } from "react";
 import {
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -80,7 +82,10 @@ export default function ChangePasswordScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
       <StatusBar
         barStyle="light-content"
         backgroundColor={COLORS.primaryBlue}
@@ -96,6 +101,7 @@ export default function ChangePasswordScreen() {
 
       <ScrollView
         style={styles.content}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.inputGroup}>
@@ -201,12 +207,12 @@ export default function ChangePasswordScreen() {
           </Text>
         </TouchableOpacity>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.primaryBlue },
+  container: { flex: 1, backgroundColor: COLORS.lightBlueBg },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -214,6 +220,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 50,
     paddingBottom: 15,
+    backgroundColor: COLORS.primaryBlue,
   },
   headerTitle: { fontSize: 18, fontWeight: "600", color: COLORS.white },
   content: {
@@ -222,7 +229,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
   },
-  scrollContent: { padding: 20, paddingTop: 30 },
+  scrollContent: { padding: 20, paddingTop: 30, flexGrow: 1 },
   inputGroup: { marginBottom: 20 },
   label: {
     fontSize: 14,
@@ -245,8 +252,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: COLORS.white,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.borderGray,
+    borderWidth: 2,
+    borderColor: COLORS.primaryBlue,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   passwordInput: {
     flex: 1,

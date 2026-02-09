@@ -287,6 +287,7 @@ export const updatePin = mutation({
 export const updateProfilePicture = mutation({
   args: {
     userId: v.id("users"),
+    profilePictureStorageId: v.optional(v.id("_storage")),
     profilePicture: v.string(),
   },
   handler: async (ctx, args) => {
@@ -295,7 +296,10 @@ export const updateProfilePicture = mutation({
       throw new Error("User not found");
     }
 
-    await ctx.db.patch(args.userId, { profilePicture: args.profilePicture });
+    await ctx.db.patch(args.userId, {
+      profilePictureStorageId: args.profilePictureStorageId,
+      profilePicture: args.profilePicture,
+    });
     return { success: true };
   },
 });

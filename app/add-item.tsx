@@ -37,6 +37,7 @@ export default function AddItemScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const addProduct = useMutation(api.products.addProduct);
+  const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -98,6 +99,26 @@ export default function AddItemScreen() {
     ]);
   };
 
+  const uploadImageToConvex = async (imageUri: string) => {
+    try {
+      const uploadUrl = await generateUploadUrl();
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+
+      const result = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": blob.type },
+        body: blob,
+      });
+
+      const { storageId } = await result.json();
+      return storageId;
+    } catch (error) {
+      console.error("Error uploading image to Convex:", error);
+      return null;
+    }
+  };
+
   const handleSave = async () => {
     if (!user?.userId) {
       Alert.alert("Error", "Please login to add items");
@@ -116,12 +137,19 @@ export default function AddItemScreen() {
 
     setIsLoading(true);
     try {
+      // Upload image to Convex if available
+      let imageStorageId = undefined;
+      if (formData.image) {
+        imageStorageId = await uploadImageToConvex(formData.image);
+      }
+
       await addProduct({
         userId: user?.userId,
         name: formData.name,
         category: formData.category,
         price: parseFloat(formData.price),
-        image: formData.image || "https://via.placeholder.com/100", // Default image if none provided
+        imageStorageId,
+        image: formData.image || "https://via.placeholder.com/100", // Fallback for legacy
       });
 
       Alert.alert("Success", "Item created successfully!", [

@@ -46,6 +46,7 @@ export default function LoginScreen() {
   const updateProfilePictureMutation = useMutation(
     api.users.updateProfilePicture,
   );
+  const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
   const handlePickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -67,6 +68,26 @@ export default function LoginScreen() {
 
     if (!result.canceled && result.assets[0]) {
       setProfilePicture(result.assets[0].uri);
+    }
+  };
+
+  const uploadImageToConvex = async (imageUri: string) => {
+    try {
+      const uploadUrl = await generateUploadUrl();
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+
+      const result = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": blob.type },
+        body: blob,
+      });
+
+      const { storageId } = await result.json();
+      return storageId;
+    } catch (error) {
+      console.error("Error uploading image to Convex:", error);
+      return null;
     }
   };
 
@@ -104,10 +125,13 @@ export default function LoginScreen() {
           name,
         });
 
-        // If profile picture was selected, upload it
+        // If profile picture was selected, upload it to Convex
+        let profilePictureStorageId = undefined;
         if (profilePicture) {
+          profilePictureStorageId = await uploadImageToConvex(profilePicture);
           await updateProfilePictureMutation({
             userId: result.userId,
+            profilePictureStorageId,
             profilePicture: profilePicture,
           });
         }
@@ -133,11 +157,11 @@ export default function LoginScreen() {
           pin: result.pin, // Include PIN if exists
           profilePicture: result.profilePicture, // Include profile picture if exists
         });
-        // If user has PIN, go to PIN entry, otherwise go to tabs
+        // If user has PIN, go to PIN entry, otherwise prompt to set up PIN
         if (result.pin) {
           router.replace("/pin-entry");
         } else {
-          router.replace("/(tabs)");
+          router.replace("/pin-setup");
         }
       }
     } catch (error: any) {

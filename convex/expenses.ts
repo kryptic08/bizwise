@@ -76,7 +76,8 @@ export const addExpense = mutation({
     title: v.string(),
     amount: v.number(),
     quantity: v.number(),
-    receiptImage: v.optional(v.string()),
+    receiptImageStorageId: v.optional(v.id("_storage")), // Convex storage ID
+    receiptImage: v.optional(v.string()), // Legacy: local URI
     ocrText: v.optional(v.string()),
     clientTimestamp: v.optional(v.number()), // Device timestamp
   },
@@ -101,6 +102,7 @@ export const addExpense = mutation({
       itemCount: 1,
       date,
       time,
+      receiptImageStorageId: args.receiptImageStorageId,
       receiptImage: args.receiptImage,
       ocrText: args.ocrText,
       createdAt: Date.now(),
@@ -132,7 +134,8 @@ export const addExpenseGroup = mutation({
         quantity: v.number(),
       }),
     ),
-    receiptImage: v.optional(v.string()),
+    receiptImageStorageId: v.optional(v.id("_storage")), // Convex storage ID
+    receiptImage: v.optional(v.string()), // Legacy: local URI
     ocrText: v.optional(v.string()),
     clientTimestamp: v.optional(v.number()), // Device timestamp
   },
@@ -162,6 +165,7 @@ export const addExpenseGroup = mutation({
       itemCount: args.items.length,
       date,
       time,
+      receiptImageStorageId: args.receiptImageStorageId,
       receiptImage: args.receiptImage,
       ocrText: args.ocrText,
       createdAt: Date.now(),

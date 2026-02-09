@@ -9,7 +9,8 @@ export default defineSchema({
     name: v.string(),
     phone: v.optional(v.string()),
     pin: v.optional(v.string()), // 4-digit PIN for quick authentication
-    profilePicture: v.optional(v.string()), // Profile picture URI
+    profilePictureStorageId: v.optional(v.id("_storage")), // Convex storage ID for profile picture
+    profilePicture: v.optional(v.string()), // Legacy: URL or local URI (kept for backward compatibility)
     createdAt: v.number(),
   }).index("by_email", ["email"]),
 
@@ -19,7 +20,8 @@ export default defineSchema({
     name: v.string(),
     category: v.string(), // "snacks" | "riceMeals" | "drinks"
     price: v.number(),
-    image: v.string(),
+    imageStorageId: v.optional(v.id("_storage")), // Convex storage ID for product image
+    image: v.string(), // Legacy: URL or local URI (kept for backward compatibility)
     isActive: v.boolean(),
     createdAt: v.number(),
   })
@@ -62,7 +64,8 @@ export default defineSchema({
     itemCount: v.number(), // Number of items in this expense
     date: v.string(),
     time: v.string(),
-    receiptImage: v.optional(v.string()),
+    receiptImageStorageId: v.optional(v.id("_storage")), // Convex storage ID for receipt image
+    receiptImage: v.optional(v.string()), // Legacy: local URI (kept for backward compatibility)
     ocrText: v.optional(v.string()),
     createdAt: v.number(),
   })

@@ -206,7 +206,7 @@ export default function CounterScreen() {
         <TouchableOpacity style={styles.iconButton}>
           <HelpTooltip
             title="Counter Help"
-            content="Manage your product inventory here. Add new products with their stock quantities, edit existing items, or tap a product to quickly add it to today's sales. The counter helps you track what's in stock."
+            content="To add items: Press the product image. To remove items: Press the number in the bottom-right corner. Use the pencil icon to edit products, or the plus icon to add new items to your inventory."
           />
         </TouchableOpacity>
       </View>

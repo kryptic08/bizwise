@@ -54,8 +54,11 @@ function RootLayoutNav() {
       } else if (user && isPinLocked && !onPinScreen) {
         // User is logged in, has PIN, and app is locked - show PIN entry
         router.replace("/pin-entry");
-      } else if (user && !isPinLocked && onAuthScreen) {
-        // User is logged in and on an auth screen - go to main app
+      } else if (user && !user.pin && !onPinScreen) {
+        // User is logged in but has no PIN - prompt to set up PIN
+        router.replace("/pin-setup");
+      } else if (user && !isPinLocked && onAuthScreen && !onPinScreen) {
+        // User is logged in, has PIN, and on an auth screen - go to main app
         router.replace("/(tabs)");
       }
     }

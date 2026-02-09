@@ -4,6 +4,8 @@ import { AlertTriangle, ArrowLeft, Eye, EyeOff } from "lucide-react-native";
 import React, { useState } from "react";
 import {
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -69,7 +71,11 @@ export default function DeleteAccountScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={0}
+    >
       <StatusBar
         barStyle="light-content"
         backgroundColor={COLORS.primaryBlue}
@@ -86,6 +92,7 @@ export default function DeleteAccountScreen() {
       <ScrollView
         style={styles.content}
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.warningBox}>
           <AlertTriangle color={COLORS.red} size={40} />
@@ -162,12 +169,12 @@ export default function DeleteAccountScreen() {
           <Text style={styles.cancelButtonText}>Cancel</Text>
         </TouchableOpacity>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.primaryBlue },
+  container: { flex: 1, backgroundColor: COLORS.lightBlueBg },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -175,6 +182,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 50,
     paddingBottom: 15,
+    backgroundColor: COLORS.primaryBlue,
   },
   headerTitle: { fontSize: 18, fontWeight: "600", color: COLORS.white },
   content: {
@@ -183,7 +191,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
   },
-  scrollContent: { padding: 20, paddingTop: 30 },
+  scrollContent: { padding: 20, paddingTop: 30, flexGrow: 1 },
   warningBox: {
     backgroundColor: "#fff5f5",
     borderRadius: 12,
@@ -249,8 +257,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: COLORS.white,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.borderGray,
+    borderWidth: 2,
+    borderColor: COLORS.primaryBlue,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   passwordInput: {
     flex: 1,
