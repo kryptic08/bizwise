@@ -24,7 +24,15 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import Svg, { Circle, G, Line } from "react-native-svg";
+import Svg, {
+  Circle,
+  Defs,
+  G,
+  Line,
+  LinearGradient,
+  Polygon,
+  Stop,
+} from "react-native-svg";
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
 import { checkTargetProgress } from "../utils/notificationChecker";
@@ -160,10 +168,10 @@ export default function HomeScreen() {
         expense: week.expense,
       }));
     } else {
-      // Monthly
+      // Monthly - show all 12 months
       if (!monthlyAnalytics) return INCOME_EXPENSE_DATA.slice(0, 6);
-      rawData = monthlyAnalytics.slice(-6).map((month) => ({
-        day: month.month,
+      rawData = monthlyAnalytics.map((month) => ({
+        day: month.month.substring(0, 3),
         income: month.income,
         expense: month.expense,
       }));
@@ -177,23 +185,33 @@ export default function HomeScreen() {
     }));
   }, [activeTab, dailyAnalytics, weeklyAnalytics, monthlyAnalytics]);
 
-  // Calculate max value for income/expense chart Y-axis (round up to nearest 500)
+  // Calculate max value for income/expense chart Y-axis
   const incomeExpenseMaxValue = useMemo(() => {
     const maxValue = Math.max(
       ...chartData.map((d) => Math.max(d.inc, d.exp)),
-      1, // Avoid division by zero
+      1,
     );
-    // Round up to nearest 500, with minimum of 1500
+    // Smart rounding based on magnitude
+    if (maxValue > 10000) {
+      return Math.ceil(maxValue / 5000) * 5000;
+    } else if (maxValue > 5000) {
+      return Math.ceil(maxValue / 2000) * 2000;
+    }
     const roundedMax = Math.ceil(maxValue / 500) * 500;
-    return Math.max(roundedMax, 1500); // Minimum scale of 1500 to show 1500, 1000, 500, 0
+    return Math.max(roundedMax, 1500);
   }, [chartData]);
 
-  // Calculate Y-axis labels for income/expense chart (increments of 500)
-  // Display from top to bottom: max, ..., 0
+  // Y-axis labels for income/expense chart
   const incomeExpenseYLabels = useMemo(() => {
     const max = incomeExpenseMaxValue;
-    // Return labels in descending order (top to bottom): [max, max-500, max-1000, 0]
-    return [max, max - 500, max - 1000, 0];
+    const step = max / 4;
+    return [
+      max,
+      Math.round(max * 0.75),
+      Math.round(max * 0.5),
+      Math.round(max * 0.25),
+      0,
+    ];
   }, [incomeExpenseMaxValue]);
 
   // Format profit data based on active tab
@@ -209,32 +227,52 @@ export default function HomeScreen() {
         .slice(-7)
         .map((week) => week.income - week.expense);
     } else {
-      // Monthly
+      // Monthly - show all 12 months
       if (!monthlyAnalytics) return PROFIT_DATA.slice(0, 6);
-      profits = monthlyAnalytics
-        .slice(-6)
-        .map((month) => month.income - month.expense);
+      profits = monthlyAnalytics.map((month) => month.income - month.expense);
     }
 
-    // Return actual profit values (no scaling)
-    return profits.map((profit) => Math.max(0, profit));
+    return profits;
   }, [activeTab, dailyAnalytics, weeklyAnalytics, monthlyAnalytics]);
 
-  // Calculate max value for profit chart Y-axis (round up to nearest 500)
+  // Calculate max value for profit chart Y-axis
   const profitMaxValue = useMemo(() => {
-    const maxValue = Math.max(...profitChartData, 1); // Avoid division by zero
-    // Round up to nearest 500, with minimum of 1500
+    const maxValue = Math.max(...profitChartData, 0);
+    if (maxValue <= 0) return 500; // Minimum axis when all values are negative
+    if (maxValue > 10000) {
+      return Math.ceil(maxValue / 5000) * 5000;
+    } else if (maxValue > 5000) {
+      return Math.ceil(maxValue / 2000) * 2000;
+    }
     const roundedMax = Math.ceil(maxValue / 500) * 500;
-    return Math.max(roundedMax, 1500); // Minimum scale of 1500 to show 1500, 1000, 500, 0
+    return Math.max(roundedMax, 1500);
   }, [profitChartData]);
 
-  // Calculate Y-axis labels for profit chart (increments of 500)
-  // Display from top to bottom: max, ..., 0
+  // Calculate min value for profit chart Y-axis (handles negative profits)
+  const profitMinValue = useMemo(() => {
+    const minValue = Math.min(...profitChartData, 0);
+    if (minValue >= 0) return 0;
+    if (minValue < -10000) {
+      return Math.floor(minValue / 5000) * 5000;
+    } else if (minValue < -5000) {
+      return Math.floor(minValue / 2000) * 2000;
+    }
+    return Math.floor(minValue / 500) * 500;
+  }, [profitChartData]);
+
+  // Y-axis labels for profit chart (spans min to max, always includes 0)
   const profitYLabels = useMemo(() => {
     const max = profitMaxValue;
-    // Return labels in descending order (top to bottom): [max, max-500, max-1000, 0]
-    return [max, max - 500, max - 1000, 0];
-  }, [profitMaxValue]);
+    const min = profitMinValue;
+    const range = max - min;
+    return [
+      max,
+      Math.round(min + range * 0.75),
+      Math.round(min + range * 0.5),
+      Math.round(min + range * 0.25),
+      min,
+    ];
+  }, [profitMaxValue, profitMinValue]);
 
   // Get labels for x-axis based on active tab
   const chartLabels = useMemo(() => {
@@ -253,7 +291,7 @@ export default function HomeScreen() {
       return ["W1", "W2", "W3", "W4", "W5", "W6", "W7"];
     } else {
       return monthlyAnalytics
-        ? monthlyAnalytics.slice(-6).map((m) => m.month)
+        ? monthlyAnalytics.map((m) => m.month.substring(0, 3))
         : ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
     }
   }, [activeTab, dailyAnalytics, monthlyAnalytics]);
@@ -287,7 +325,11 @@ export default function HomeScreen() {
       }
 
       const growthRate =
-        firstAvg > 0 ? ((secondAvg - firstAvg) / firstAvg) * 100 : 0;
+        firstAvg !== 0
+          ? ((secondAvg - firstAvg) / Math.abs(firstAvg)) * 100
+          : secondAvg > 0
+            ? 100
+            : 0;
 
       if (growthRate > 15) {
         return `🎉 Excellent! Profit grew by ${Math.round(growthRate)}% this period. Keep up the great work!`;
@@ -307,6 +349,10 @@ export default function HomeScreen() {
       return "✅ Strong profit performance! Keep maintaining this momentum.";
     } else if (avgProfit > 0) {
       return "📊 Positive profit. Continue optimizing your operations.";
+    } else if (avgProfit < -1000) {
+      return `🚨 Operating at a loss (avg ₱${Math.abs(Math.round(avgProfit)).toLocaleString()}/period). Review expenses urgently.`;
+    } else if (avgProfit < 0) {
+      return "⚠️ Slight loss this period. Monitor expenses closely.";
     } else {
       return "";
     }
@@ -368,6 +414,16 @@ export default function HomeScreen() {
       return "📈 Keep tracking your finances for better insights over time.";
     }
   }, [chartData]);
+
+  // Format Y-axis labels with K suffix for thousands (handles negatives)
+  const formatYLabel = (val: number) => {
+    const absVal = Math.abs(val);
+    if (absVal >= 1000) {
+      const sign = val < 0 ? "-" : "";
+      return `${sign}${(absVal / 1000).toFixed(absVal % 1000 === 0 ? 0 : 1)}k`;
+    }
+    return String(val);
+  };
 
   const handleCardPress = (type: "balance" | "expense") => {
     Animated.sequence([
@@ -661,120 +717,191 @@ export default function HomeScreen() {
 
           {/* Profit Section */}
           <View style={styles.chartCard}>
-            <Text style={styles.chartTitle}>Profit</Text>
+            <View style={styles.chartHeader}>
+              <Text style={styles.chartTitle}>Profit</Text>
+              <View style={styles.chartLegend}>
+                <View style={styles.legendDot} />
+                <Text style={styles.legendText}>Profit</Text>
+              </View>
+            </View>
 
-            {/* Visual Line Chart Mockup */}
             <View style={styles.graphContainer}>
               {/* Y-Axis Labels */}
               <View style={styles.yAxis}>
-                <Text style={styles.axisText}>{profitYLabels[0]}</Text>
-                <Text style={styles.axisText}>{profitYLabels[1]}</Text>
-                <Text style={styles.axisText}>{profitYLabels[2]}</Text>
-                <Text style={styles.axisText}>{profitYLabels[3]}</Text>
-              </View>
-
-              {/* Chart Area */}
-              <View style={styles.plotArea}>
-                {/* Horizontal Grid Lines */}
-                {[1, 2, 3, 4].map((_, i) => (
-                  <View
-                    key={i}
-                    style={[styles.gridLine, { bottom: i * 35 + 25 }]}
-                  />
+                {profitYLabels.map((label, i) => (
+                  <Text key={i} style={styles.axisText}>
+                    {formatYLabel(label)}
+                  </Text>
                 ))}
-
-                {/* Plot Points & Lines with SVG */}
-                <View style={styles.pointsContainer}>
-                  {(() => {
-                    const chartWidth = SCREEN_WIDTH - 100; // Account for padding and y-axis
-                    const chartHeight = 120;
-                    const paddingX = 20;
-                    const paddingY = 10;
-                    const totalPoints = profitChartData.length;
-                    const availableWidth = chartWidth - paddingX * 2;
-                    const spacing =
-                      totalPoints > 1
-                        ? availableWidth / (totalPoints - 1)
-                        : availableWidth;
-
-                    // Calculate points (scale based on max value)
-                    const points = profitChartData.map((val, index) => ({
-                      x:
-                        paddingX +
-                        (totalPoints > 1
-                          ? index * spacing
-                          : availableWidth / 2),
-                      y:
-                        paddingY +
-                        chartHeight -
-                        (val / profitMaxValue) * chartHeight,
-                    }));
-
-                    return (
-                      <>
-                        <Svg
-                          width={chartWidth}
-                          height={chartHeight + paddingY * 2}
-                        >
-                          <G>
-                            {/* Draw lines between points */}
-                            {points.map((point, index) => {
-                              if (index === 0) return null;
-                              const prevPoint = points[index - 1];
-                              return (
-                                <Line
-                                  key={`line-${index}`}
-                                  x1={prevPoint.x}
-                                  y1={prevPoint.y}
-                                  x2={point.x}
-                                  y2={point.y}
-                                  stroke={COLORS.primaryBlue}
-                                  strokeWidth={2.5}
-                                  strokeLinecap="round"
-                                />
-                              );
-                            })}
-                            {/* Draw circles at each point */}
-                            {points.map((point, index) => (
-                              <Circle
-                                key={`circle-${index}`}
-                                cx={point.x}
-                                cy={point.y}
-                                r={6}
-                                fill={COLORS.primaryBlue}
-                                stroke={COLORS.white}
-                                strokeWidth={2}
-                              />
-                            ))}
-                          </G>
-                        </Svg>
-
-                        {/* X-axis labels */}
-                        <View
-                          style={[styles.xAxisLabels, { width: chartWidth }]}
-                        >
-                          {points.map((point, index) => (
-                            <Text
-                              key={`label-${index}`}
-                              style={[
-                                styles.dayText,
-                                {
-                                  position: "absolute",
-                                  left: point.x - 12,
-                                  width: 24,
-                                  textAlign: "center",
-                                },
-                              ]}
-                            >
-                              {chartLabels[index] || ""}
-                            </Text>
-                          ))}
-                        </View>
-                      </>
-                    );
-                  })()}
-                </View>
               </View>
+
+              {/* Scrollable Chart Area */}
+              <ScrollView
+                key={`profit-scroll-${activeTab}`}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{
+                  minWidth:
+                    activeTab === "Monthly"
+                      ? profitChartData.length * 60 + 20
+                      : profitChartData.length * 50,
+                }}
+                style={styles.scrollPlot}
+              >
+                <View style={styles.plotArea}>
+                  {/* Grid Lines */}
+                  {profitYLabels.map((_, i) => (
+                    <View
+                      key={i}
+                      style={[
+                        styles.gridLine,
+                        { bottom: (i / (profitYLabels.length - 1)) * 150 },
+                      ]}
+                    />
+                  ))}
+
+                  {/* SVG Area Chart */}
+                  <View
+                    key={`profit-svg-${activeTab}`}
+                    style={styles.pointsContainer}
+                  >
+                    {(() => {
+                      const totalPoints = profitChartData.length;
+                      const minSpacing = activeTab === "Monthly" ? 55 : 50;
+                      const spacing = Math.max(
+                        (SCREEN_WIDTH - 120) / (totalPoints - 1),
+                        minSpacing,
+                      );
+                      const chartWidth = (totalPoints - 1) * spacing + 40;
+                      const chartHeight = 140;
+                      const paddingX = 20;
+                      const paddingY = 5;
+
+                      const profitRange = profitMaxValue - profitMinValue || 1;
+                      const points = profitChartData.map((val, index) => ({
+                        x: paddingX + index * spacing,
+                        y:
+                          paddingY +
+                          chartHeight -
+                          ((val - profitMinValue) / profitRange) * chartHeight,
+                      }));
+
+                      // Build area polygon - line points + bottom corners
+                      // Fill area from line to zero line (or chart bottom if all positive)
+                      const zeroY =
+                        profitMinValue < 0
+                          ? paddingY +
+                            chartHeight -
+                            ((0 - profitMinValue) / profitRange) * chartHeight
+                          : paddingY + chartHeight;
+                      const areaPoints =
+                        points.map((p) => `${p.x},${p.y}`).join(" ") +
+                        ` ${points[points.length - 1].x},${zeroY} ${paddingX},${zeroY}`;
+
+                      return (
+                        <>
+                          <Svg
+                            width={chartWidth}
+                            height={chartHeight + paddingY * 2 + 25}
+                          >
+                            <Defs>
+                              <LinearGradient
+                                id="profitGradient"
+                                x1="0"
+                                y1="0"
+                                x2="0"
+                                y2="1"
+                              >
+                                <Stop
+                                  offset="0"
+                                  stopColor={COLORS.primaryBlue}
+                                  stopOpacity="0.3"
+                                />
+                                <Stop
+                                  offset="1"
+                                  stopColor={COLORS.primaryBlue}
+                                  stopOpacity="0.02"
+                                />
+                              </LinearGradient>
+                            </Defs>
+                            <G>
+                              {/* Zero reference line when range spans positive and negative */}
+                              {profitMinValue < 0 && profitMaxValue > 0 && (
+                                <Line
+                                  x1={0}
+                                  y1={zeroY}
+                                  x2={chartWidth}
+                                  y2={zeroY}
+                                  stroke="#aab5c3"
+                                  strokeWidth={1}
+                                  strokeDasharray="4,3"
+                                />
+                              )}
+                              {/* Filled area */}
+                              {points.length > 1 && (
+                                <Polygon
+                                  points={areaPoints}
+                                  fill="url(#profitGradient)"
+                                />
+                              )}
+                              {/* Lines */}
+                              {points.map((point, index) => {
+                                if (index === 0) return null;
+                                return (
+                                  <Line
+                                    key={`pl-${index}`}
+                                    x1={points[index - 1].x}
+                                    y1={points[index - 1].y}
+                                    x2={point.x}
+                                    y2={point.y}
+                                    stroke={COLORS.primaryBlue}
+                                    strokeWidth={2.5}
+                                    strokeLinecap="round"
+                                  />
+                                );
+                              })}
+                              {/* Dots */}
+                              {points.map((point, index) => (
+                                <Circle
+                                  key={`pc-${index}`}
+                                  cx={point.x}
+                                  cy={point.y}
+                                  r={5}
+                                  fill={COLORS.primaryBlue}
+                                  stroke={COLORS.white}
+                                  strokeWidth={2}
+                                />
+                              ))}
+                            </G>
+                          </Svg>
+
+                          {/* X-axis labels */}
+                          <View
+                            style={[styles.xAxisLabels, { width: chartWidth }]}
+                          >
+                            {points.map((point, index) => (
+                              <Text
+                                key={`lbl-${index}`}
+                                style={[
+                                  styles.axisLabelText,
+                                  {
+                                    position: "absolute",
+                                    left: point.x - 16,
+                                    width: 32,
+                                    textAlign: "center",
+                                  },
+                                ]}
+                              >
+                                {chartLabels[index] || ""}
+                              </Text>
+                            ))}
+                          </View>
+                        </>
+                      );
+                    })()}
+                  </View>
+                </View>
+              </ScrollView>
             </View>
 
             {/* Profit Summary */}
@@ -799,56 +926,103 @@ export default function HomeScreen() {
 
           {/* Income & Expenses Section */}
           <View style={styles.chartCard}>
-            <Text style={styles.chartTitle}>Income & Expenses</Text>
-
-            {/* Bar Chart */}
-            <View style={styles.graphContainer}>
-              <View style={styles.yAxis}>
-                <Text style={styles.axisText}>{incomeExpenseYLabels[0]}</Text>
-                <Text style={styles.axisText}>{incomeExpenseYLabels[1]}</Text>
-                <Text style={styles.axisText}>{incomeExpenseYLabels[2]}</Text>
-                <Text style={styles.axisText}>{incomeExpenseYLabels[3]}</Text>
-              </View>
-
-              <View style={styles.plotArea}>
-                {/* Horizontal Grid Lines */}
-                {[1, 2, 3, 4].map((_, i) => (
+            <View style={styles.chartHeader}>
+              <Text style={styles.chartTitle}>Income & Expenses</Text>
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <View style={styles.chartLegend}>
                   <View
-                    key={i}
-                    style={[styles.gridLine, { bottom: i * 35 + 25 }]}
+                    style={[
+                      styles.legendDot,
+                      { backgroundColor: COLORS.green },
+                    ]}
                   />
-                ))}
-
-                <View style={styles.barContainer}>
-                  {chartData.map((item, index) => (
-                    <View key={index} style={styles.barGroup}>
-                      <View style={styles.barsWrapper}>
-                        {/* Green Bar (Income) */}
-                        <View
-                          style={[
-                            styles.bar,
-                            {
-                              height: (item.inc / incomeExpenseMaxValue) * 140,
-                              backgroundColor: COLORS.green,
-                            },
-                          ]}
-                        />
-                        {/* Red Bar (Expense) */}
-                        <View
-                          style={[
-                            styles.bar,
-                            {
-                              height: (item.exp / incomeExpenseMaxValue) * 140,
-                              backgroundColor: COLORS.red,
-                            },
-                          ]}
-                        />
-                      </View>
-                      <Text style={styles.dayText}>{item.day}</Text>
-                    </View>
-                  ))}
+                  <Text style={styles.legendText}>Income</Text>
+                </View>
+                <View style={styles.chartLegend}>
+                  <View
+                    style={[styles.legendDot, { backgroundColor: COLORS.red }]}
+                  />
+                  <Text style={styles.legendText}>Expense</Text>
                 </View>
               </View>
+            </View>
+
+            <View style={styles.graphContainer}>
+              <View style={styles.yAxis}>
+                {incomeExpenseYLabels.map((label, i) => (
+                  <Text key={i} style={styles.axisText}>
+                    {formatYLabel(label)}
+                  </Text>
+                ))}
+              </View>
+
+              <ScrollView
+                key={`bar-scroll-${activeTab}`}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{
+                  minWidth:
+                    activeTab === "Monthly"
+                      ? chartData.length * 60
+                      : chartData.length * 50,
+                  paddingHorizontal: activeTab === "Monthly" ? 10 : 0,
+                }}
+                style={styles.scrollPlot}
+              >
+                <View style={styles.plotArea}>
+                  {incomeExpenseYLabels.map((_, i) => (
+                    <View
+                      key={i}
+                      style={[
+                        styles.gridLine,
+                        {
+                          bottom: (i / (incomeExpenseYLabels.length - 1)) * 150,
+                        },
+                      ]}
+                    />
+                  ))}
+
+                  <View key={`bars-${activeTab}`} style={styles.barContainer}>
+                    {chartData.map((item, index) => (
+                      <View
+                        key={index}
+                        style={[
+                          styles.barGroup,
+                          { width: activeTab === "Monthly" ? 60 : 50 },
+                        ]}
+                      >
+                        <View style={styles.barsWrapper}>
+                          <View
+                            style={[
+                              styles.bar,
+                              {
+                                height: Math.max(
+                                  2,
+                                  (item.inc / incomeExpenseMaxValue) * 140,
+                                ),
+                                backgroundColor: COLORS.green,
+                              },
+                            ]}
+                          />
+                          <View
+                            style={[
+                              styles.bar,
+                              {
+                                height: Math.max(
+                                  2,
+                                  (item.exp / incomeExpenseMaxValue) * 140,
+                                ),
+                                backgroundColor: COLORS.red,
+                              },
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.axisLabelText}>{item.day}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </ScrollView>
             </View>
 
             {/* Income/Expense Totals */}
@@ -1043,60 +1217,96 @@ const styles = StyleSheet.create({
 
   // Charts
   chartCard: {
-    backgroundColor: COLORS.tabBg,
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 20,
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  chartHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
   },
   chartTitle: {
-    fontSize: 14,
-    fontWeight: "600",
+    fontSize: 15,
+    fontWeight: "700",
     color: COLORS.textDark,
-    marginBottom: 15,
+  },
+  chartLegend: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.primaryBlue,
+  },
+  legendText: {
+    fontSize: 10,
+    color: COLORS.textGray,
   },
   graphContainer: {
     flexDirection: "row",
-    height: 180,
+    height: 200,
     marginBottom: 10,
   },
   yAxis: {
     justifyContent: "space-between",
-    paddingBottom: 20,
-    paddingRight: 10,
-    height: 160,
+    paddingBottom: 22,
+    paddingRight: 8,
+    height: 180,
+    minWidth: 32,
   },
   axisText: {
-    fontSize: 10,
+    fontSize: 9,
     color: COLORS.textGray,
     textAlign: "right",
+    fontWeight: "500",
+  },
+  axisLabelText: {
+    marginTop: 6,
+    fontSize: 9,
+    color: COLORS.textGray,
+    fontWeight: "500",
+  },
+  scrollPlot: {
+    flex: 1,
   },
   plotArea: {
     flex: 1,
-    height: 160,
+    height: 180,
     position: "relative",
     borderLeftWidth: 1,
-    borderLeftColor: COLORS.textGray,
+    borderLeftColor: "#dde5ed",
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.textGray,
+    borderBottomColor: "#dde5ed",
   },
   gridLine: {
     position: "absolute",
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: "rgba(0,0,0,0.08)",
+    backgroundColor: "rgba(0,0,0,0.04)",
   },
 
   // Line Chart Specifics
   pointsContainer: {
     position: "relative",
     alignItems: "center",
-    paddingBottom: 30,
+    paddingBottom: 25,
   },
   xAxisLabels: {
     position: "relative",
     height: 20,
-    marginTop: -5,
+    marginTop: -8,
   },
   pointWrapper: {
     alignItems: "center",
@@ -1123,10 +1333,11 @@ const styles = StyleSheet.create({
   // Bar Chart Specifics
   barContainer: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    justifyContent: "space-around",
     alignItems: "flex-end",
     height: "100%",
     paddingHorizontal: 5,
+    paddingBottom: 2,
   },
   barGroup: {
     alignItems: "center",
@@ -1135,16 +1346,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     height: 140,
-    gap: 4,
+    gap: 3,
   },
   bar: {
-    width: 6,
-    borderRadius: 3,
+    width: 10,
+    borderRadius: 5,
+    minHeight: 2,
   },
   dayText: {
     marginTop: 8,
-    fontSize: 10,
+    fontSize: 9,
     color: COLORS.textGray,
+    fontWeight: "500",
   },
 
   // Summaries

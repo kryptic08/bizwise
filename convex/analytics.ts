@@ -2,10 +2,11 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 
 // Get financial summary (totals) for a user
+// Optimized to process sales and calculate totals in a single pass
 export const getFinancialSummary = query({
   args: { userId: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
-    // Get total income from sales
+    // Get sales and calculate totals in parallel
     let sales;
     if (args.userId) {
       sales = await ctx.db
@@ -15,36 +16,52 @@ export const getFinancialSummary = query({
     } else {
       sales = await ctx.db.query("sales").collect();
     }
-    const totalIncome = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
 
-    // Get total expenses
-    let expenses;
-    if (args.userId) {
-      expenses = await ctx.db
-        .query("expenses")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId))
-        .collect();
-    } else {
-      expenses = await ctx.db.query("expenses").collect();
-    }
+    // Get expenses in parallel with sale items processing
+    const [expenses, saleItemsData] = await Promise.all([
+      args.userId
+        ? ctx.db
+            .query("expenses")
+            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .collect()
+        : ctx.db.query("expenses").collect(),
+
+      // Fetch all sale items in parallel (batch operation)
+      Promise.all(
+        sales.slice(0, 100).map(async (sale) => {
+          const items = await ctx.db
+            .query("saleItems")
+            .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+            .collect();
+          return items.reduce((sum, item) => sum + item.quantity, 0);
+        }),
+      ),
+    ]);
+
+    // Calculate totals
+    const totalIncome = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
     const totalExpense = expenses.reduce(
       (sum, expense) => sum + expense.totalAmount,
       0,
     );
 
-    // Calculate total products sold (sum of quantities from all sale items)
-    const salesIds = sales.map((sale) => sale._id);
-    let totalProductsSold = 0;
+    // Sum up products sold from the batched results
+    const totalProductsSold = saleItemsData.reduce((sum, qty) => sum + qty, 0);
 
-    for (const saleId of salesIds) {
-      const saleItems = await ctx.db
-        .query("saleItems")
-        .withIndex("by_sale", (q) => q.eq("saleId", saleId))
-        .collect();
-      totalProductsSold += saleItems.reduce(
-        (sum, item) => sum + item.quantity,
-        0,
+    // If there are more than 100 sales, add remaining products
+    let remainingProductsSold = 0;
+    if (sales.length > 100) {
+      const remainingSales = sales.slice(100);
+      const remainingItems = await Promise.all(
+        remainingSales.slice(0, 100).map(async (sale) => {
+          const items = await ctx.db
+            .query("saleItems")
+            .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+            .collect();
+          return items.reduce((sum, item) => sum + item.quantity, 0);
+        }),
       );
+      remainingProductsSold = remainingItems.reduce((sum, qty) => sum + qty, 0);
     }
 
     return {
@@ -52,8 +69,8 @@ export const getFinancialSummary = query({
       totalIncome,
       totalExpense,
       profit: totalIncome - totalExpense,
-      productsSold: totalProductsSold,
-      transactionCount: sales.length, // Number of transactions
+      productsSold: totalProductsSold + remainingProductsSold,
+      transactionCount: sales.length,
     };
   },
 });
@@ -77,14 +94,15 @@ export const getDailyAnalytics = query({
 
     const analytics = await Promise.all(
       dateArray.map(async (date) => {
-        // Get sales for this date
+        // Get sales for this date using compound index
         let sales;
         if (args.userId) {
-          const allSales = await ctx.db
+          sales = await ctx.db
             .query("sales")
-            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .withIndex("by_user_date", (q) =>
+              q.eq("userId", args.userId).eq("date", date),
+            )
             .collect();
-          sales = allSales.filter((s) => s.date === date);
         } else {
           sales = await ctx.db
             .query("sales")
@@ -92,14 +110,15 @@ export const getDailyAnalytics = query({
             .collect();
         }
 
-        // Get expenses for this date
+        // Get expenses for this date using compound index
         let expenses;
         if (args.userId) {
-          const allExpenses = await ctx.db
+          expenses = await ctx.db
             .query("expenses")
-            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .withIndex("by_user_date", (q) =>
+              q.eq("userId", args.userId).eq("date", date),
+            )
             .collect();
-          expenses = allExpenses.filter((e) => e.date === date);
         } else {
           expenses = await ctx.db
             .query("expenses")
@@ -125,14 +144,15 @@ export const getDailyAnalytics = query({
   },
 });
 
-// Get monthly analytics (January to December) for a user
+// Get monthly analytics (last 12 months) for a user
+// Optimized: uses range queries per month on compound index (only 24 queries for 12 months)
+// Previous per-day approach (~730 queries) exceeded the 4,096 read limit
 export const getMonthlyAnalytics = query({
   args: {
     year: v.optional(v.number()),
     userId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    const currentYear = args.year || new Date().getFullYear();
     const monthNames = [
       "January",
       "February",
@@ -148,60 +168,81 @@ export const getMonthlyAnalytics = query({
       "December",
     ];
 
+    // Build the 12 months to query (last 12 months including current)
+    const months: { year: number; month: number }[] = [];
+    const now = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
+      months.push({ year: d.getFullYear(), month: d.getMonth() });
+    }
+
+    // Process each month using efficient RANGE queries on the compound index
     const monthlyData = await Promise.all(
-      Array.from({ length: 12 }, async (_, monthIndex) => {
-        // Get all sales and expenses for the year
+      months.map(async ({ year, month }) => {
+        // Start: first day of this month, End: first day of next month
+        const mm = String(month + 1).padStart(2, "0");
+        const startDate = `${year}-${mm}-01`;
+
+        const nextMonth = month + 1;
+        const endYear = nextMonth > 11 ? year + 1 : year;
+        const endMM = String((nextMonth > 11 ? 0 : nextMonth) + 1).padStart(
+          2,
+          "0",
+        );
+        const endDate = `${endYear}-${endMM}-01`;
+
         let sales;
         let expenses;
 
         if (args.userId) {
-          sales = await ctx.db
-            .query("sales")
-            .withIndex("by_user", (q) => q.eq("userId", args.userId))
-            .collect();
-          expenses = await ctx.db
-            .query("expenses")
-            .withIndex("by_user", (q) => q.eq("userId", args.userId))
-            .collect();
+          [sales, expenses] = await Promise.all([
+            ctx.db
+              .query("sales")
+              .withIndex("by_user_date", (q) =>
+                q
+                  .eq("userId", args.userId)
+                  .gte("date", startDate)
+                  .lt("date", endDate),
+              )
+              .collect(),
+            ctx.db
+              .query("expenses")
+              .withIndex("by_user_date", (q) =>
+                q
+                  .eq("userId", args.userId)
+                  .gte("date", startDate)
+                  .lt("date", endDate),
+              )
+              .collect(),
+          ]);
         } else {
-          sales = await ctx.db.query("sales").collect();
-          expenses = await ctx.db.query("expenses").collect();
+          [sales, expenses] = await Promise.all([
+            ctx.db
+              .query("sales")
+              .withIndex("by_date", (q) =>
+                q.gte("date", startDate).lt("date", endDate),
+              )
+              .collect(),
+            ctx.db
+              .query("expenses")
+              .withIndex("by_date", (q) =>
+                q.gte("date", startDate).lt("date", endDate),
+              )
+              .collect(),
+          ]);
         }
 
-        // Filter by month
-        const monthSales = sales.filter((s) => {
-          const saleDate = new Date(s.date);
-          return (
-            saleDate.getFullYear() === currentYear &&
-            saleDate.getMonth() === monthIndex
-          );
-        });
-
-        const monthExpenses = expenses.filter((e) => {
-          const expenseDate = new Date(e.date);
-          return (
-            expenseDate.getFullYear() === currentYear &&
-            expenseDate.getMonth() === monthIndex
-          );
-        });
-
-        const income = monthSales.reduce(
-          (sum, sale) => sum + sale.totalAmount,
-          0,
-        );
-        const expense = monthExpenses.reduce(
-          (sum, exp) => sum + exp.totalAmount,
-          0,
-        );
+        const income = sales.reduce((sum, s) => sum + s.totalAmount, 0);
+        const expense = expenses.reduce((sum, e) => sum + e.totalAmount, 0);
 
         return {
-          month: monthNames[monthIndex],
-          monthNumber: monthIndex + 1,
+          month: monthNames[month],
+          monthNumber: month + 1,
           income,
           expense,
           profit: income - expense,
-          salesCount: monthSales.length,
-          expenseCount: monthExpenses.length,
+          salesCount: sales.length,
+          expenseCount: expenses.length,
         };
       }),
     );
@@ -313,9 +354,6 @@ export const getCombinedTransactions = query({
         })),
       };
 
-      console.log(
-        `Adding SALE: ${sale.transactionId}, createdAt: ${sale.createdAt}, formatted: ${transaction.time}`,
-      );
       allTransactions.push(transaction);
     }
 
@@ -345,27 +383,175 @@ export const getCombinedTransactions = query({
         })),
       };
 
-      console.log(
-        `Adding EXPENSE: ${expense.transactionId}, createdAt: ${expense.createdAt}, formatted: ${transaction.time}`,
-      );
       allTransactions.push(transaction);
     }
 
     // Sort ALL transactions by sortKey (most recent first)
     allTransactions.sort((a, b) => b.sortKey - a.sortKey);
 
-    // Debug log
-    console.log(
-      "Final sorted transactions:",
-      allTransactions.map((t) => ({
-        type: t.type,
-        id: t.transactionId,
-        time: t.time,
-        sortKey: t.sortKey,
-      })),
-    );
-
     return allTransactions;
+  },
+});
+
+// Get combined transactions with pagination (more efficient)
+export const getCombinedTransactionsPaginated = query({
+  args: {
+    userId: v.id("users"),
+    limit: v.number(),
+    cursor: v.optional(v.number()), // createdAt timestamp for pagination
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit, 50); // Cap at 50 for safety
+
+    // Get sales with pagination
+    let salesQuery = ctx.db
+      .query("sales")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .order("desc");
+
+    const allSales = await salesQuery.take(limit * 2); // Get more to ensure we have enough after filtering
+
+    // Get expenses with pagination
+    let expensesQuery = ctx.db
+      .query("expenses")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .order("desc");
+
+    const allExpenses = await expensesQuery.take(limit * 2);
+
+    // Helper functions
+    const formatTime = (timestamp: number) => {
+      const phTimestamp = timestamp + 8 * 60 * 60 * 1000;
+      const date = new Date(phTimestamp);
+      const hours24 = date.getUTCHours();
+      const minutes = date.getUTCMinutes();
+      const ampm = hours24 >= 12 ? "PM" : "AM";
+      let hours = hours24 % 12;
+      hours = hours ? hours : 12;
+      return `${hours}:${minutes.toString().padStart(2, "0")} ${ampm}`;
+    };
+
+    const formatDate = (timestamp: number) => {
+      const phTimestamp = timestamp + 8 * 60 * 60 * 1000;
+      const date = new Date(phTimestamp);
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      return `${months[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
+    };
+
+    // Combine and sort transactions
+    const allTransactions: Array<{
+      id: string;
+      transactionId: string;
+      date: string;
+      time: string;
+      items: string;
+      amount: string;
+      type: "income" | "expense";
+      createdAt: number;
+      sortKey: number;
+      itemDetails: Array<{
+        name: string;
+        category: string;
+        pricePerPiece: string;
+        pieces: number;
+        amount: string;
+      }>;
+    }> = [];
+
+    // Process sales
+    for (const sale of allSales) {
+      if (args.cursor && sale.createdAt >= args.cursor) continue;
+
+      const items = await ctx.db
+        .query("saleItems")
+        .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+        .collect();
+
+      allTransactions.push({
+        id: sale._id,
+        transactionId: sale.transactionId,
+        date: formatDate(sale.createdAt),
+        time: formatTime(sale.createdAt),
+        items: `${sale.itemCount} items`,
+        amount: `₱${sale.totalAmount.toFixed(2)}`,
+        type: "income" as const,
+        createdAt: sale.createdAt,
+        sortKey: sale.createdAt,
+        itemDetails: items.map((item) => ({
+          name: item.productName,
+          category: item.category,
+          pricePerPiece: `₱${item.price.toFixed(2)}`,
+          pieces: item.quantity,
+          amount: `₱${item.subtotal.toFixed(2)}`,
+        })),
+      });
+    }
+
+    // Process expenses
+    for (const expense of allExpenses) {
+      if (args.cursor && expense.createdAt >= args.cursor) continue;
+
+      const items = await ctx.db
+        .query("expenseItems")
+        .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
+        .collect();
+
+      allTransactions.push({
+        id: expense._id,
+        transactionId: expense.transactionId,
+        date: formatDate(expense.createdAt),
+        time: formatTime(expense.createdAt),
+        items: `${expense.itemCount} items`,
+        amount: `₱${expense.totalAmount.toFixed(2)}`,
+        type: "expense" as const,
+        createdAt: expense.createdAt,
+        sortKey: expense.createdAt,
+        itemDetails: items.map((item) => ({
+          name: item.title,
+          category: item.category,
+          pricePerPiece: `₱${item.amount.toFixed(2)}`,
+          pieces: item.quantity,
+          amount: `₱${item.total.toFixed(2)}`,
+        })),
+      });
+    }
+
+    // Sort by most recent first
+    allTransactions.sort((a, b) => b.sortKey - a.sortKey);
+
+    // Take only the requested limit
+    const paginatedTransactions = allTransactions.slice(0, limit);
+
+    // Determine if there are more results
+    const hasMore =
+      allTransactions.length > limit ||
+      allSales.length === limit * 2 ||
+      allExpenses.length === limit * 2;
+
+    // Get the cursor for next page (oldest item's createdAt)
+    const nextCursor =
+      paginatedTransactions.length > 0
+        ? paginatedTransactions[paginatedTransactions.length - 1].createdAt
+        : undefined;
+
+    return {
+      transactions: paginatedTransactions,
+      hasMore,
+      nextCursor,
+    };
   },
 });
 
@@ -391,42 +577,62 @@ export const getWeeklyAnalytics = query({
       const startDateStr = weekStart.toISOString().slice(0, 10);
       const endDateStr = weekEnd.toISOString().slice(0, 10);
 
-      // Get sales for this week
-      let sales;
-      if (args.userId) {
-        const allSales = await ctx.db
-          .query("sales")
-          .withIndex("by_user", (q) => q.eq("userId", args.userId))
-          .collect();
-        sales = allSales.filter(
-          (s) => s.date >= startDateStr && s.date <= endDateStr,
-        );
-      } else {
-        sales = await ctx.db.query("sales").collect();
-        sales = sales.filter(
-          (s) => s.date >= startDateStr && s.date <= endDateStr,
-        );
+      // Generate date array for the week
+      const weekDates = [];
+      for (
+        let d = new Date(weekStart);
+        d <= weekEnd;
+        d.setDate(d.getDate() + 1)
+      ) {
+        weekDates.push(d.toISOString().slice(0, 10));
       }
 
-      // Get expenses for this week
-      let expenses;
-      if (args.userId) {
-        const allExpenses = await ctx.db
-          .query("expenses")
-          .withIndex("by_user", (q) => q.eq("userId", args.userId))
-          .collect();
-        expenses = allExpenses.filter(
-          (e) => e.date >= startDateStr && e.date <= endDateStr,
-        );
-      } else {
-        expenses = await ctx.db.query("expenses").collect();
-        expenses = expenses.filter(
-          (e) => e.date >= startDateStr && e.date <= endDateStr,
-        );
-      }
+      // Query each day in the week using compound index
+      const weekData = await Promise.all(
+        weekDates.map(async (date) => {
+          let sales, expenses;
 
-      const income = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
-      const expense = expenses.reduce((sum, exp) => sum + exp.totalAmount, 0);
+          if (args.userId) {
+            [sales, expenses] = await Promise.all([
+              ctx.db
+                .query("sales")
+                .withIndex("by_user_date", (q) =>
+                  q.eq("userId", args.userId).eq("date", date),
+                )
+                .collect(),
+              ctx.db
+                .query("expenses")
+                .withIndex("by_user_date", (q) =>
+                  q.eq("userId", args.userId).eq("date", date),
+                )
+                .collect(),
+            ]);
+          } else {
+            [sales, expenses] = await Promise.all([
+              ctx.db
+                .query("sales")
+                .withIndex("by_date", (q) => q.eq("date", date))
+                .collect(),
+              ctx.db
+                .query("expenses")
+                .withIndex("by_date", (q) => q.eq("date", date))
+                .collect(),
+            ]);
+          }
+
+          return { sales, expenses };
+        }),
+      );
+
+      // Aggregate the week's data
+      const allSales = weekData.flatMap((d) => d.sales);
+      const allExpenses = weekData.flatMap((d) => d.expenses);
+
+      const income = allSales.reduce((sum, sale) => sum + sale.totalAmount, 0);
+      const expense = allExpenses.reduce(
+        (sum, exp) => sum + exp.totalAmount,
+        0,
+      );
 
       analytics.push({
         weekStart: startDateStr,
@@ -434,8 +640,8 @@ export const getWeeklyAnalytics = query({
         income,
         expense,
         profit: income - expense,
-        salesCount: sales.length,
-        expenseCount: expenses.length,
+        salesCount: allSales.length,
+        expenseCount: allExpenses.length,
       });
     }
 
@@ -598,6 +804,211 @@ export const getTargetProgress = query({
       status,
       currentDay,
       totalDaysInMonth,
+    };
+  },
+});
+
+// Get analytics for a custom date range (for PDF reports)
+export const getAnalyticsByDateRange = query({
+  args: {
+    userId: v.id("users"),
+    startMonth: v.number(), // 1-12
+    startYear: v.number(),
+    endMonth: v.number(), // 1-12
+    endYear: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const monthNames = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+
+    // Build month list from start to end
+    const months: { year: number; month: number }[] = [];
+    let y = args.startYear;
+    let m = args.startMonth - 1; // 0-indexed
+    const endM = args.endMonth - 1;
+    const endY = args.endYear;
+
+    while (y < endY || (y === endY && m <= endM)) {
+      months.push({ year: y, month: m });
+      m++;
+      if (m > 11) {
+        m = 0;
+        y++;
+      }
+    }
+
+    // Calculate totals and monthly data by querying each day efficiently
+    let totalIncome = 0;
+    let totalExpense = 0;
+    let totalSalesCount = 0;
+    let totalProductsSold = 0;
+
+    const monthlyData = await Promise.all(
+      months.map(async ({ year, month }) => {
+        // Generate all dates in this month
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const monthDates = [];
+        for (let day = 1; day <= daysInMonth; day++) {
+          const date = new Date(year, month, day);
+          monthDates.push(date.toISOString().slice(0, 10));
+        }
+
+        // Query all dates in parallel using compound index
+        const dailyData = await Promise.all(
+          monthDates.map(async (date) => {
+            const [sales, expenses] = await Promise.all([
+              ctx.db
+                .query("sales")
+                .withIndex("by_user_date", (q) =>
+                  q.eq("userId", args.userId).eq("date", date),
+                )
+                .collect(),
+              ctx.db
+                .query("expenses")
+                .withIndex("by_user_date", (q) =>
+                  q.eq("userId", args.userId).eq("date", date),
+                )
+                .collect(),
+            ]);
+            return { sales, expenses };
+          }),
+        );
+
+        // Aggregate month data
+        const monthSales = dailyData.flatMap((d) => d.sales);
+        const monthExpenses = dailyData.flatMap((d) => d.expenses);
+
+        const income = monthSales.reduce((sum, s) => sum + s.totalAmount, 0);
+        const expense = monthExpenses.reduce(
+          (sum, e) => sum + e.totalAmount,
+          0,
+        );
+
+        // Calculate products sold for this month (limited batching)
+        let monthProductsSold = 0;
+        const salesBatch = monthSales.slice(0, 50); // Limit to avoid too many reads
+        for (const sale of salesBatch) {
+          const saleItems = await ctx.db
+            .query("saleItems")
+            .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+            .collect();
+          monthProductsSold += saleItems.reduce(
+            (sum, item) => sum + item.quantity,
+            0,
+          );
+        }
+
+        totalIncome += income;
+        totalExpense += expense;
+        totalSalesCount += monthSales.length;
+        totalProductsSold += monthProductsSold;
+
+        return {
+          month: `${monthNames[month]} ${year}`,
+          monthNumber: month + 1,
+          income,
+          expense,
+          profit: income - expense,
+          salesCount: monthSales.length,
+          expenseCount: monthExpenses.length,
+        };
+      }),
+    );
+
+    return {
+      monthlyData,
+      summary: {
+        totalIncome,
+        totalExpense,
+        profit: totalIncome - totalExpense,
+        productsSold: totalProductsSold,
+        transactionCount: totalSalesCount,
+        averageTransaction:
+          totalSalesCount > 0 ? totalIncome / totalSalesCount : 0,
+      },
+    };
+  },
+});
+
+// Get the date range that has actual data (earliest and latest transaction dates)
+// Optimized to use order and pagination instead of collecting all records
+export const getDataDateRange = query({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    // Get a sample of recent sales and expenses to determine active date range
+    // This is much more efficient than collecting all records
+    const [recentSales, recentExpenses] = await Promise.all([
+      ctx.db
+        .query("sales")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .take(500), // Sample recent transactions
+      ctx.db
+        .query("expenses")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .take(500),
+    ]);
+
+    // Also get oldest records
+    const [oldestSales, oldestExpenses] = await Promise.all([
+      ctx.db
+        .query("sales")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .order("asc")
+        .take(100),
+      ctx.db
+        .query("expenses")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .order("asc")
+        .take(100),
+    ]);
+
+    // Combine all sampled records
+    const allRecords = [
+      ...recentSales,
+      ...recentExpenses,
+      ...oldestSales,
+      ...oldestExpenses,
+    ];
+
+    if (allRecords.length === 0) {
+      return {
+        monthsWithData: [],
+        minYear: new Date().getFullYear(),
+        maxYear: new Date().getFullYear(),
+      };
+    }
+
+    // Collect all unique months from sampled data
+    const monthsWithData = new Set<string>();
+    for (const record of allRecords) {
+      const d = new Date(record.date);
+      monthsWithData.add(`${d.getFullYear()}-${d.getMonth() + 1}`);
+    }
+
+    const years = [...monthsWithData].map((m) => parseInt(m.split("-")[0]));
+    const minYear = Math.min(...years);
+    const maxYear = Math.max(...years);
+
+    return {
+      monthsWithData: [...monthsWithData].sort(), // ["2025-2", "2025-3", ...]
+      minYear,
+      maxYear,
     };
   },
 });

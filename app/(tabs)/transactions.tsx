@@ -61,10 +61,15 @@ export default function TransactionScreen() {
   const router = useRouter();
   const { user } = useAuth();
 
-  // Fetch transactions from Convex
-  const combinedTransactions = useQuery(
-    api.analytics.getCombinedTransactions,
-    user?.userId ? { userId: user.userId } : "skip",
+  // Pagination state
+  const [cursor, setCursor] = useState<number | undefined>(undefined);
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  // Fetch transactions from Convex with pagination
+  const paginatedData = useQuery(
+    api.analytics.getCombinedTransactionsPaginated,
+    user?.userId ? { userId: user.userId, limit: 20, cursor } : "skip",
   );
 
   // Fetch financial summary for totals
@@ -76,10 +81,31 @@ export default function TransactionScreen() {
   const [filterType, setFilterType] = useState<TransactionType | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Update transactions when new data arrives
+  React.useEffect(() => {
+    if (paginatedData?.transactions) {
+      if (cursor === undefined) {
+        // Initial load
+        setAllTransactions(paginatedData.transactions);
+      } else {
+        // Append new transactions
+        setAllTransactions((prev) => {
+          // Avoid duplicates
+          const existingIds = new Set(prev.map((t) => t.id));
+          const newTransactions = paginatedData.transactions.filter(
+            (t) => !existingIds.has(t.id),
+          );
+          return [...prev, ...newTransactions];
+        });
+      }
+      setIsLoadingMore(false);
+    }
+  }, [paginatedData]);
+
   // Debug: log transactions as they arrive
   console.log(
     "Received transactions:",
-    combinedTransactions?.map((t) => ({
+    paginatedData?.transactions?.map((t) => ({
       type: t.type,
       id: t.transactionId,
       time: t.time,
@@ -90,17 +116,25 @@ export default function TransactionScreen() {
   const toggleFilter = (type: TransactionType) => {
     setFilterType((prev) => (prev === type ? "all" : type));
     setExpandedId(null);
+    // Don't reset pagination - just filter the existing data
   };
 
   const handleTransactionPress = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
   };
 
+  const handleLoadMore = () => {
+    if (paginatedData?.hasMore && !isLoadingMore && paginatedData?.nextCursor) {
+      setIsLoadingMore(true);
+      setCursor(paginatedData.nextCursor);
+    }
+  };
+
   // Filter transactions - data comes pre-sorted from backend by recency
-  const filteredTransactions = combinedTransactions
+  const filteredTransactions = allTransactions
     ? filterType === "all"
-      ? combinedTransactions
-      : combinedTransactions.filter((t) => t.type === filterType)
+      ? allTransactions
+      : allTransactions.filter((t) => t.type === filterType)
     : [];
 
   const renderItem = ({ item }: { item: Transaction }) => {
@@ -223,7 +257,7 @@ export default function TransactionScreen() {
   };
 
   // Show loading state
-  if (combinedTransactions === undefined) {
+  if (paginatedData === undefined && allTransactions.length === 0) {
     return (
       <View
         style={[
@@ -328,15 +362,24 @@ export default function TransactionScreen() {
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContainer}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={() =>
+            isLoadingMore ? (
+              <View style={styles.loadingMore}>
+                <Text style={styles.loadingMoreText}>Loading more...</Text>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={() => (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>
-                {combinedTransactions === undefined
+                {paginatedData === undefined
                   ? "Loading transactions..."
                   : "No transactions found"}
               </Text>
               <Text style={styles.emptySubtext}>
-                {combinedTransactions !== undefined &&
+                {paginatedData !== undefined &&
                   "Start making sales or adding expenses to see them here."}
               </Text>
             </View>
@@ -661,5 +704,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     textAlign: "center",
+  },
+  loadingMore: {
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+  loadingMoreText: {
+    fontSize: 14,
+    color: COLORS.textGray,
   },
 });

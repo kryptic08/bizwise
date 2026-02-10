@@ -3,18 +3,22 @@ import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
   ArrowLeft,
+  Calendar,
+  ChevronDown,
   Download,
   LifeBuoy,
   LogOut,
   Settings,
   ShieldCheck,
   User,
+  X,
 } from "lucide-react-native";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -29,33 +33,51 @@ import { generatePDFReport } from "../utils/pdfGenerator";
 // --- Colors ---
 const COLORS = {
   primaryBlue: "#3b6ea5",
-  contentBg: "#f0f6fc", // Very light blue/white
+  contentBg: "#f0f6fc",
   white: "#ffffff",
   textDark: "#1f2937",
   textGray: "#6b7280",
   textLight: "#9ca3af",
-
-  // Icon Background shades based on image
   iconLightBlue: "#89b3eb",
   iconBlue: "#5a96d4",
-  iconDarkBlue: "#0055ff", // Bright vibrant blue for settings
+  iconDarkBlue: "#0055ff",
   dangerBlue: "#4a8ad4",
+  green: "#10b981",
+  border: "#e5e7eb",
 };
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showFromMonthPicker, setShowFromMonthPicker] = useState(false);
+  const [showToMonthPicker, setShowToMonthPicker] = useState(false);
+
+  // Default: last 12 months
+  const now = new Date();
+  const defaultFrom = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+  const [fromMonth, setFromMonth] = useState(defaultFrom.getMonth() + 1);
+  const [fromYear, setFromYear] = useState(defaultFrom.getFullYear());
+  const [toMonth, setToMonth] = useState(now.getMonth() + 1);
+  const [toYear, setToYear] = useState(now.getFullYear());
 
   // Fetch data for PDF generation
-  const financialSummary = useQuery(
-    api.analytics.getFinancialSummary,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  const dailyAnalytics = useQuery(
-    api.analytics.getDailyAnalytics,
-    user?.userId ? { days: 7, userId: user.userId } : "skip",
-  );
   const topProduct = useQuery(
     api.analytics.getTopSellingProduct,
     user?.userId ? { userId: user.userId } : "skip",
@@ -64,18 +86,52 @@ export default function ProfileScreen() {
     api.analytics.getTopSellingCategory,
     user?.userId ? { userId: user.userId } : "skip",
   );
-  const monthlyAnalytics = useQuery(
-    api.analytics.getMonthlyAnalytics,
+  // Fetch data for chosen date range
+  const rangeAnalytics = useQuery(
+    api.analytics.getAnalyticsByDateRange,
+    user?.userId
+      ? {
+          userId: user.userId,
+          startMonth: fromMonth,
+          startYear: fromYear,
+          endMonth: toMonth,
+          endYear: toYear,
+        }
+      : "skip",
+  );
+
+  // Fetch which months actually have data
+  const dataDateRange = useQuery(
+    api.analytics.getDataDateRange,
     user?.userId ? { userId: user.userId } : "skip",
   );
 
+  // Helper: check if a given month/year has data
+  const monthHasData = (month: number, year: number) => {
+    if (!dataDateRange || dataDateRange.monthsWithData.length === 0)
+      return true; // if loading, allow all
+    return dataDateRange.monthsWithData.includes(`${year}-${month}`);
+  };
+
+  // Check if the selected year has any data at all
+  const yearHasAnyData = (year: number) => {
+    if (!dataDateRange || dataDateRange.monthsWithData.length === 0)
+      return true;
+    return dataDateRange.monthsWithData.some((m) => m.startsWith(`${year}-`));
+  };
+
+  const handleExportPress = () => {
+    setShowDatePicker(true);
+  };
+
   const handleGeneratePDF = async () => {
-    if (
-      !financialSummary ||
-      !dailyAnalytics ||
-      !topProduct ||
-      !monthlyAnalytics
-    ) {
+    // Check if data is still loading
+    if (rangeAnalytics === undefined || topProduct === undefined) {
+      // Data is still loading, don't show error
+      return;
+    }
+
+    if (!rangeAnalytics || !topProduct) {
       Alert.alert(
         "Error",
         "Unable to generate report. Please try again later.",
@@ -83,48 +139,36 @@ export default function ProfileScreen() {
       return;
     }
 
+    setShowDatePicker(false);
     setIsGeneratingPDF(true);
     try {
-      // Prepare chart data
-      const chartData = dailyAnalytics.slice(-7).map((day) => ({
-        day: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
-          new Date(day.date).getDay()
-        ],
-        inc: day.income,
-        exp: day.expense,
+      const { summary, monthlyData } = rangeAnalytics;
+
+      const dateRange = `${MONTH_NAMES[fromMonth - 1]} ${fromYear} - ${MONTH_NAMES[toMonth - 1]} ${toYear}`;
+
+      // Build daily chart data from monthly (summary view for PDF daily table)
+      const chartData = monthlyData.slice(-7).map((m) => ({
+        day: m.month,
+        inc: m.income,
+        exp: m.expense,
       }));
-
-      // Calculate average transaction (per sale, not per product)
-      const averageTransaction =
-        financialSummary.transactionCount > 0
-          ? financialSummary.totalIncome / financialSummary.transactionCount
-          : 0;
-
-      console.log("PDF Data:", {
-        productsSold: financialSummary.productsSold,
-        transactionCount: financialSummary.transactionCount,
-        averageTransaction,
-        totalIncome: financialSummary.totalIncome,
-      });
 
       await generatePDFReport(
         user?.name || "My Business",
         user?.name || "Business Owner",
-        "Last 7 Days",
+        dateRange,
         {
-          totalIncome: financialSummary.totalIncome,
-          totalExpense: financialSummary.totalExpense,
-          profit: financialSummary.profit,
-          productsSold: financialSummary.productsSold,
-          averageTransaction,
+          totalIncome: summary.totalIncome,
+          totalExpense: summary.totalExpense,
+          profit: summary.profit,
+          productsSold: summary.productsSold,
+          averageTransaction: summary.averageTransaction,
           topProduct: topProduct?.name || "N/A",
           topCategory: topCategory?.name || "N/A",
         },
         chartData,
-        monthlyAnalytics,
+        monthlyData,
       );
-
-      // Success alert is handled by generatePDFReport
     } catch (error) {
       console.error("Error generating PDF:", error);
       Alert.alert("Error", "Failed to generate report. Please try again.");
@@ -148,7 +192,7 @@ export default function ProfileScreen() {
         router.push("/help");
         break;
       case "Export Report":
-        handleGeneratePDF();
+        handleExportPress();
         break;
       case "Logout":
         Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -297,6 +341,305 @@ export default function ProfileScreen() {
         <Text style={styles.userName}>{user?.name || "User"}</Text>
         <Text style={styles.userId}>{user?.email || ""}</Text>
       </View>
+
+      {/* Date Range Picker Modal */}
+      <Modal
+        visible={showDatePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Calendar color={COLORS.primaryBlue} size={22} />
+              <Text style={styles.modalTitle}>Select Report Period</Text>
+              <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                <X color={COLORS.textGray} size={22} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSubtitle}>
+              Choose the date range for your business report
+            </Text>
+
+            {/* From */}
+            <Text style={styles.pickerLabel}>From</Text>
+            <TouchableOpacity
+              style={styles.pickerButton}
+              onPress={() => setShowFromMonthPicker(true)}
+            >
+              <Text style={styles.pickerButtonText}>
+                {MONTH_NAMES[fromMonth - 1]} {fromYear}
+              </Text>
+              <ChevronDown color={COLORS.textGray} size={18} />
+            </TouchableOpacity>
+
+            {/* To */}
+            <Text style={styles.pickerLabel}>To</Text>
+            <TouchableOpacity
+              style={styles.pickerButton}
+              onPress={() => setShowToMonthPicker(true)}
+            >
+              <Text style={styles.pickerButtonText}>
+                {MONTH_NAMES[toMonth - 1]} {toYear}
+              </Text>
+              <ChevronDown color={COLORS.textGray} size={18} />
+            </TouchableOpacity>
+
+            {/* Quick presets */}
+            <Text style={styles.pickerLabel}>Quick Select</Text>
+            <View style={styles.presetRow}>
+              {[
+                { label: "Last 3 Months", months: 3 },
+                { label: "Last 6 Months", months: 6 },
+                { label: "Last 12 Months", months: 12 },
+              ].map((preset) => (
+                <TouchableOpacity
+                  key={preset.months}
+                  style={styles.presetButton}
+                  onPress={() => {
+                    const d = new Date();
+                    const from = new Date(
+                      d.getFullYear(),
+                      d.getMonth() - (preset.months - 1),
+                      1,
+                    );
+                    setFromMonth(from.getMonth() + 1);
+                    setFromYear(from.getFullYear());
+                    setToMonth(d.getMonth() + 1);
+                    setToYear(d.getFullYear());
+                  }}
+                >
+                  <Text style={styles.presetButtonText}>{preset.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={styles.presetButton}
+              onPress={() => {
+                const yr = new Date().getFullYear();
+                setFromMonth(1);
+                setFromYear(yr);
+                setToMonth(12);
+                setToYear(yr);
+              }}
+            >
+              <Text style={styles.presetButtonText}>
+                This Year ({new Date().getFullYear()})
+              </Text>
+            </TouchableOpacity>
+
+            {/* Generate button */}
+            <TouchableOpacity
+              style={[
+                styles.generateButton,
+                (isGeneratingPDF ||
+                  rangeAnalytics === undefined ||
+                  topProduct === undefined) &&
+                  styles.generateButtonDisabled,
+              ]}
+              onPress={handleGeneratePDF}
+              disabled={
+                isGeneratingPDF ||
+                rangeAnalytics === undefined ||
+                topProduct === undefined
+              }
+            >
+              {isGeneratingPDF ||
+              rangeAnalytics === undefined ||
+              topProduct === undefined ? (
+                <ActivityIndicator size="small" color={COLORS.white} />
+              ) : (
+                <>
+                  <Download color={COLORS.white} size={18} />
+                  <Text style={styles.generateButtonText}>Generate Report</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* From Month Picker */}
+      <Modal
+        visible={showFromMonthPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowFromMonthPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.monthPickerContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Start Month</Text>
+              <TouchableOpacity onPress={() => setShowFromMonthPicker(false)}>
+                <X color={COLORS.textGray} size={22} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Year toggle */}
+            <View style={styles.yearRow}>
+              <TouchableOpacity
+                onPress={() => setFromYear((y) => y - 1)}
+                disabled={
+                  !dataDateRange || fromYear <= (dataDateRange.minYear || 2020)
+                }
+              >
+                <Text
+                  style={[
+                    styles.yearArrow,
+                    (!dataDateRange ||
+                      fromYear <= (dataDateRange.minYear || 2020)) &&
+                      styles.yearArrowDisabled,
+                  ]}
+                >
+                  ‹
+                </Text>
+              </TouchableOpacity>
+              <Text style={styles.yearText}>{fromYear}</Text>
+              <TouchableOpacity
+                onPress={() => setFromYear((y) => y + 1)}
+                disabled={
+                  !dataDateRange || fromYear >= (dataDateRange.maxYear || 2030)
+                }
+              >
+                <Text
+                  style={[
+                    styles.yearArrow,
+                    (!dataDateRange ||
+                      fromYear >= (dataDateRange.maxYear || 2030)) &&
+                      styles.yearArrowDisabled,
+                  ]}
+                >
+                  ›
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.monthGrid}>
+              {MONTH_NAMES.map((name, i) => {
+                const hasData = monthHasData(i + 1, fromYear);
+                const isActive = fromMonth === i + 1;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={[
+                      styles.monthCell,
+                      isActive && styles.monthCellActive,
+                      !hasData && !isActive && styles.monthCellDisabled,
+                    ]}
+                    onPress={() => {
+                      setFromMonth(i + 1);
+                      setShowFromMonthPicker(false);
+                    }}
+                    disabled={!hasData}
+                  >
+                    <Text
+                      style={[
+                        styles.monthCellText,
+                        isActive && styles.monthCellTextActive,
+                        !hasData && !isActive && styles.monthCellTextDisabled,
+                      ]}
+                    >
+                      {name.substring(0, 3)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* To Month Picker */}
+      <Modal
+        visible={showToMonthPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowToMonthPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.monthPickerContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select End Month</Text>
+              <TouchableOpacity onPress={() => setShowToMonthPicker(false)}>
+                <X color={COLORS.textGray} size={22} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Year toggle */}
+            <View style={styles.yearRow}>
+              <TouchableOpacity
+                onPress={() => setToYear((y) => y - 1)}
+                disabled={
+                  !dataDateRange || toYear <= (dataDateRange.minYear || 2020)
+                }
+              >
+                <Text
+                  style={[
+                    styles.yearArrow,
+                    (!dataDateRange ||
+                      toYear <= (dataDateRange.minYear || 2020)) &&
+                      styles.yearArrowDisabled,
+                  ]}
+                >
+                  ‹
+                </Text>
+              </TouchableOpacity>
+              <Text style={styles.yearText}>{toYear}</Text>
+              <TouchableOpacity
+                onPress={() => setToYear((y) => y + 1)}
+                disabled={
+                  !dataDateRange || toYear >= (dataDateRange.maxYear || 2030)
+                }
+              >
+                <Text
+                  style={[
+                    styles.yearArrow,
+                    (!dataDateRange ||
+                      toYear >= (dataDateRange.maxYear || 2030)) &&
+                      styles.yearArrowDisabled,
+                  ]}
+                >
+                  ›
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.monthGrid}>
+              {MONTH_NAMES.map((name, i) => {
+                const hasData = monthHasData(i + 1, toYear);
+                const isActive = toMonth === i + 1;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={[
+                      styles.monthCell,
+                      isActive && styles.monthCellActive,
+                      !hasData && !isActive && styles.monthCellDisabled,
+                    ]}
+                    onPress={() => {
+                      setToMonth(i + 1);
+                      setShowToMonthPicker(false);
+                    }}
+                    disabled={!hasData}
+                  >
+                    <Text
+                      style={[
+                        styles.monthCellText,
+                        isActive && styles.monthCellTextActive,
+                        !hasData && !isActive && styles.monthCellTextDisabled,
+                      ]}
+                    >
+                      {name.substring(0, 3)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -426,5 +769,160 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     color: "#374151",
+  },
+
+  // Date Range Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.textDark,
+    flex: 1,
+    marginLeft: 8,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    color: COLORS.textGray,
+    marginBottom: 20,
+  },
+  pickerLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.textGray,
+    marginBottom: 6,
+    marginTop: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  pickerButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#f9fafb",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 12,
+  },
+  pickerButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: COLORS.textDark,
+  },
+  presetRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 8,
+  },
+  presetButton: {
+    flex: 1,
+    backgroundColor: "#f0f6fc",
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  presetButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.primaryBlue,
+  },
+  generateButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 14,
+    paddingVertical: 16,
+    marginTop: 12,
+    gap: 8,
+  },
+  generateButtonDisabled: {
+    opacity: 0.6,
+  },
+  generateButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: COLORS.white,
+  },
+
+  // Month Picker Modal
+  monthPickerContent: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  yearRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: 16,
+    gap: 24,
+  },
+  yearArrow: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+    paddingHorizontal: 12,
+  },
+  yearText: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  monthGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "center",
+  },
+  monthCell: {
+    width: "30%",
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    backgroundColor: "#f9fafb",
+  },
+  monthCellActive: {
+    backgroundColor: COLORS.primaryBlue,
+  },
+  monthCellText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.textDark,
+  },
+  monthCellTextActive: {
+    color: COLORS.white,
+  },
+  monthCellDisabled: {
+    backgroundColor: "#f3f4f6",
+    opacity: 0.5,
+  },
+  monthCellTextDisabled: {
+    color: "#d1d5db",
+  },
+  yearArrowDisabled: {
+    opacity: 0.3,
   },
 });
