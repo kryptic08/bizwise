@@ -1,8 +1,8 @@
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Camera, HelpCircle } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   Image,
@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { api } from "../convex/_generated/api";
+import { Id } from "../convex/_generated/dataModel";
 import { useAuth } from "./context/AuthContext";
 
 const COLORS = {
@@ -26,26 +27,33 @@ const COLORS = {
   borderGray: "#d1d5db",
 };
 
-const CATEGORIES = ["snacks", "riceMeals", "drinks"];
-const CATEGORY_DISPLAY_NAMES = {
-  snacks: "Snacks",
-  riceMeals: "Rice Meal",
-  drinks: "Drinks",
-};
-
 export default function AddItemScreen() {
   const router = useRouter();
   const { user } = useAuth();
+  const { categoryId } = useLocalSearchParams<{ categoryId?: string }>();
+
+  // Queries and mutations
+  const categories = useQuery(
+    api.categories.getCategories,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
   const addProduct = useMutation(api.products.addProduct);
   const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
   const [formData, setFormData] = useState({
     name: "",
-    category: "",
+    categoryId: categoryId || "",
     price: "",
     image: "",
   });
   const [isLoading, setIsLoading] = useState(false);
+
+  // Set initial category from URL param
+  useEffect(() => {
+    if (categoryId && !formData.categoryId) {
+      setFormData((prev) => ({ ...prev, categoryId }));
+    }
+  }, [categoryId]);
 
   const pickImage = async () => {
     // Request permission
@@ -125,7 +133,7 @@ export default function AddItemScreen() {
       return;
     }
 
-    if (!formData.name || !formData.category || !formData.price) {
+    if (!formData.name || !formData.categoryId || !formData.price) {
       Alert.alert("Error", "Please fill in all required fields");
       return;
     }
@@ -137,6 +145,14 @@ export default function AddItemScreen() {
 
     setIsLoading(true);
     try {
+      // Get category details
+      const selectedCategory = categories?.find(
+        (c) => c._id === formData.categoryId,
+      );
+      if (!selectedCategory) {
+        throw new Error("Invalid category selected");
+      }
+
       // Upload image to Convex if available
       let imageStorageId = undefined;
       if (formData.image) {
@@ -146,7 +162,8 @@ export default function AddItemScreen() {
       await addProduct({
         userId: user?.userId,
         name: formData.name,
-        category: formData.category,
+        category: selectedCategory.name, // Legacy field
+        categoryId: formData.categoryId as Id<"categories">,
         price: parseFloat(formData.price),
         imageStorageId,
         image: formData.image || "https://via.placeholder.com/100", // Fallback for legacy
@@ -227,32 +244,39 @@ export default function AddItemScreen() {
           {/* Category Section */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Category *</Text>
-            <View style={styles.categoryContainer}>
-              {CATEGORIES.map((category) => (
-                <TouchableOpacity
-                  key={category}
-                  style={[
-                    styles.categoryChip,
-                    formData.category === category && styles.categoryChipActive,
-                  ]}
-                  onPress={() => setFormData({ ...formData, category })}
-                >
-                  <Text
+            {categories === undefined ? (
+              <Text style={styles.loadingText}>Loading categories...</Text>
+            ) : categories.length === 0 ? (
+              <Text style={styles.emptyText}>
+                No categories available. Please create categories first.
+              </Text>
+            ) : (
+              <View style={styles.categoryContainer}>
+                {categories.map((category) => (
+                  <TouchableOpacity
+                    key={category._id}
                     style={[
-                      styles.categoryText,
-                      formData.category === category &&
-                        styles.categoryTextActive,
+                      styles.categoryChip,
+                      formData.categoryId === category._id &&
+                        styles.categoryChipActive,
                     ]}
-                  >
-                    {
-                      CATEGORY_DISPLAY_NAMES[
-                        category as keyof typeof CATEGORY_DISPLAY_NAMES
-                      ]
+                    onPress={() =>
+                      setFormData({ ...formData, categoryId: category._id })
                     }
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                  >
+                    <Text
+                      style={[
+                        styles.categoryText,
+                        formData.categoryId === category._id &&
+                          styles.categoryTextActive,
+                      ]}
+                    >
+                      {category.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
           </View>
 
           {/* Price Section */}
@@ -371,6 +395,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: COLORS.textGray,
+    fontStyle: "italic",
+    marginTop: 8,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textGray,
+    marginTop: 8,
   },
   categoryChip: {
     paddingHorizontal: 16,

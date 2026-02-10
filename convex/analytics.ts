@@ -32,11 +32,28 @@ export const getFinancialSummary = query({
       0,
     );
 
+    // Calculate total products sold (sum of quantities from all sale items)
+    const salesIds = sales.map((sale) => sale._id);
+    let totalProductsSold = 0;
+
+    for (const saleId of salesIds) {
+      const saleItems = await ctx.db
+        .query("saleItems")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId))
+        .collect();
+      totalProductsSold += saleItems.reduce(
+        (sum, item) => sum + item.quantity,
+        0,
+      );
+    }
+
     return {
       totalBalance: totalIncome - totalExpense,
       totalIncome,
       totalExpense,
       profit: totalIncome - totalExpense,
+      productsSold: totalProductsSold,
+      transactionCount: sales.length, // Number of transactions
     };
   },
 });
@@ -105,6 +122,91 @@ export const getDailyAnalytics = query({
     );
 
     return analytics;
+  },
+});
+
+// Get monthly analytics (January to December) for a user
+export const getMonthlyAnalytics = query({
+  args: {
+    year: v.optional(v.number()),
+    userId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const currentYear = args.year || new Date().getFullYear();
+    const monthNames = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+
+    const monthlyData = await Promise.all(
+      Array.from({ length: 12 }, async (_, monthIndex) => {
+        // Get all sales and expenses for the year
+        let sales;
+        let expenses;
+
+        if (args.userId) {
+          sales = await ctx.db
+            .query("sales")
+            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .collect();
+          expenses = await ctx.db
+            .query("expenses")
+            .withIndex("by_user", (q) => q.eq("userId", args.userId))
+            .collect();
+        } else {
+          sales = await ctx.db.query("sales").collect();
+          expenses = await ctx.db.query("expenses").collect();
+        }
+
+        // Filter by month
+        const monthSales = sales.filter((s) => {
+          const saleDate = new Date(s.date);
+          return (
+            saleDate.getFullYear() === currentYear &&
+            saleDate.getMonth() === monthIndex
+          );
+        });
+
+        const monthExpenses = expenses.filter((e) => {
+          const expenseDate = new Date(e.date);
+          return (
+            expenseDate.getFullYear() === currentYear &&
+            expenseDate.getMonth() === monthIndex
+          );
+        });
+
+        const income = monthSales.reduce(
+          (sum, sale) => sum + sale.totalAmount,
+          0,
+        );
+        const expense = monthExpenses.reduce(
+          (sum, exp) => sum + exp.totalAmount,
+          0,
+        );
+
+        return {
+          month: monthNames[monthIndex],
+          monthNumber: monthIndex + 1,
+          income,
+          expense,
+          profit: income - expense,
+          salesCount: monthSales.length,
+          expenseCount: monthExpenses.length,
+        };
+      }),
+    );
+
+    return monthlyData;
   },
 });
 
@@ -341,85 +443,6 @@ export const getWeeklyAnalytics = query({
   },
 });
 
-// Get monthly analytics (last N months) for a user
-export const getMonthlyAnalytics = query({
-  args: {
-    months: v.number(),
-    userId: v.optional(v.id("users")),
-  },
-  handler: async (ctx, args) => {
-    const today = new Date();
-    const analytics = [];
-
-    for (let i = args.months - 1; i >= 0; i--) {
-      const monthDate = new Date(today.getFullYear(), today.getMonth() - i, 1);
-      const monthStart = new Date(
-        monthDate.getFullYear(),
-        monthDate.getMonth(),
-        1,
-      );
-      const monthEnd = new Date(
-        monthDate.getFullYear(),
-        monthDate.getMonth() + 1,
-        0,
-      );
-
-      const startDateStr = monthStart.toISOString().slice(0, 10);
-      const endDateStr = monthEnd.toISOString().slice(0, 10);
-
-      // Get sales for this month
-      let sales;
-      if (args.userId) {
-        const allSales = await ctx.db
-          .query("sales")
-          .withIndex("by_user", (q) => q.eq("userId", args.userId))
-          .collect();
-        sales = allSales.filter(
-          (s) => s.date >= startDateStr && s.date <= endDateStr,
-        );
-      } else {
-        sales = await ctx.db.query("sales").collect();
-        sales = sales.filter(
-          (s) => s.date >= startDateStr && s.date <= endDateStr,
-        );
-      }
-
-      // Get expenses for this month
-      let expenses;
-      if (args.userId) {
-        const allExpenses = await ctx.db
-          .query("expenses")
-          .withIndex("by_user", (q) => q.eq("userId", args.userId))
-          .collect();
-        expenses = allExpenses.filter(
-          (e) => e.date >= startDateStr && e.date <= endDateStr,
-        );
-      } else {
-        expenses = await ctx.db.query("expenses").collect();
-        expenses = expenses.filter(
-          (e) => e.date >= startDateStr && e.date <= endDateStr,
-        );
-      }
-
-      const income = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
-      const expense = expenses.reduce((sum, exp) => sum + exp.totalAmount, 0);
-
-      analytics.push({
-        month: monthDate.toLocaleString("en-US", { month: "short" }),
-        monthStart: startDateStr,
-        monthEnd: endDateStr,
-        income,
-        expense,
-        profit: income - expense,
-        salesCount: sales.length,
-        expenseCount: expenses.length,
-      });
-    }
-
-    return analytics;
-  },
-});
-
 // Get top selling product for a user
 export const getTopSellingProduct = query({
   args: { userId: v.optional(v.id("users")) },
@@ -505,5 +528,76 @@ export const getTopSellingCategory = query({
     }
 
     return topCategory;
+  },
+});
+
+// Get target income progress for current month
+export const getTargetProgress = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    // Get user and target
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.targetIncome || !user.targetIncome.monthly) {
+      return null;
+    }
+
+    const target = user.targetIncome;
+
+    // Get current month's date range
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const currentDay = now.getDate();
+    const totalDaysInMonth = endOfMonth.getDate();
+
+    // Calculate date strings for filtering
+    const startDateStr = startOfMonth.toISOString().slice(0, 10);
+    const endDateStr = endOfMonth.toISOString().slice(0, 10);
+
+    // Get all sales for current month
+    const allSales = await ctx.db
+      .query("sales")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    const monthSales = allSales.filter(
+      (sale) => sale.date >= startDateStr && sale.date <= endDateStr,
+    );
+
+    const currentIncome = monthSales.reduce(
+      (sum, sale) => sum + sale.totalAmount,
+      0,
+    );
+
+    // Calculate progress
+    const progressPercentage = (currentIncome / target.monthly) * 100;
+    const remaining = target.monthly - currentIncome;
+    const daysRemaining = totalDaysInMonth - currentDay;
+    const requiredDailyIncome =
+      daysRemaining > 0 ? remaining / daysRemaining : 0;
+
+    // Determine status
+    const expectedIncome = (target.monthly / totalDaysInMonth) * currentDay;
+    let status: "ahead" | "on-track" | "behind" = "on-track";
+
+    if (currentIncome >= target.monthly) {
+      status = "ahead";
+    } else if (currentIncome >= expectedIncome * 0.9) {
+      status = "on-track";
+    } else {
+      status = "behind";
+    }
+
+    return {
+      target: target.monthly,
+      current: currentIncome,
+      remaining: Math.max(0, remaining),
+      progressPercentage: Math.min(100, progressPercentage),
+      daysRemaining,
+      requiredDailyIncome: Math.max(0, requiredDailyIncome),
+      status,
+      currentDay,
+      totalDaysInMonth,
+    };
   },
 });

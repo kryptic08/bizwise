@@ -1,15 +1,18 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
+import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
   ArrowLeft,
+  Download,
   LifeBuoy,
   LogOut,
   Settings,
   ShieldCheck,
   User,
 } from "lucide-react-native";
-import React from "react";
+import React, { useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Image,
   ScrollView,
@@ -19,7 +22,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
+import { generatePDFReport } from "../utils/pdfGenerator";
 
 // --- Colors ---
 const COLORS = {
@@ -40,6 +45,93 @@ const COLORS = {
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+
+  // Fetch data for PDF generation
+  const financialSummary = useQuery(
+    api.analytics.getFinancialSummary,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
+  const dailyAnalytics = useQuery(
+    api.analytics.getDailyAnalytics,
+    user?.userId ? { days: 7, userId: user.userId } : "skip",
+  );
+  const topProduct = useQuery(
+    api.analytics.getTopSellingProduct,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
+  const topCategory = useQuery(
+    api.analytics.getTopSellingCategory,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
+  const monthlyAnalytics = useQuery(
+    api.analytics.getMonthlyAnalytics,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
+
+  const handleGeneratePDF = async () => {
+    if (
+      !financialSummary ||
+      !dailyAnalytics ||
+      !topProduct ||
+      !monthlyAnalytics
+    ) {
+      Alert.alert(
+        "Error",
+        "Unable to generate report. Please try again later.",
+      );
+      return;
+    }
+
+    setIsGeneratingPDF(true);
+    try {
+      // Prepare chart data
+      const chartData = dailyAnalytics.slice(-7).map((day) => ({
+        day: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+          new Date(day.date).getDay()
+        ],
+        inc: day.income,
+        exp: day.expense,
+      }));
+
+      // Calculate average transaction (per sale, not per product)
+      const averageTransaction =
+        financialSummary.transactionCount > 0
+          ? financialSummary.totalIncome / financialSummary.transactionCount
+          : 0;
+
+      console.log("PDF Data:", {
+        productsSold: financialSummary.productsSold,
+        transactionCount: financialSummary.transactionCount,
+        averageTransaction,
+        totalIncome: financialSummary.totalIncome,
+      });
+
+      await generatePDFReport(
+        user?.name || "My Business",
+        user?.name || "Business Owner",
+        "Last 7 Days",
+        {
+          totalIncome: financialSummary.totalIncome,
+          totalExpense: financialSummary.totalExpense,
+          profit: financialSummary.profit,
+          productsSold: financialSummary.productsSold,
+          averageTransaction,
+          topProduct: topProduct?.name || "N/A",
+          topCategory: topCategory?.name || "N/A",
+        },
+        chartData,
+        monthlyAnalytics,
+      );
+
+      // Success alert is handled by generatePDFReport
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      Alert.alert("Error", "Failed to generate report. Please try again.");
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
 
   const handleMenuPress = (label: string) => {
     switch (label) {
@@ -54,6 +146,9 @@ export default function ProfileScreen() {
         break;
       case "Help":
         router.push("/help");
+        break;
+      case "Export Report":
+        handleGeneratePDF();
         break;
       case "Logout":
         Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -92,12 +187,18 @@ export default function ProfileScreen() {
     },
     {
       id: 4,
+      label: "Export Report",
+      icon: Download,
+      color: "#10b981", // Green for export
+    },
+    {
+      id: 5,
       label: "Help",
       icon: LifeBuoy,
       color: COLORS.iconLightBlue,
     },
     {
-      id: 5,
+      id: 6,
       label: "Logout",
       icon: LogOut,
       color: COLORS.dangerBlue,
@@ -145,16 +246,29 @@ export default function ProfileScreen() {
                 style={styles.menuItem}
                 onPress={() => handleMenuPress(item.label)}
                 activeOpacity={0.7}
+                disabled={isGeneratingPDF && item.label === "Export Report"}
               >
                 <View
                   style={[
                     styles.menuIconCircle,
                     { backgroundColor: item.color },
+                    isGeneratingPDF &&
+                      item.label === "Export Report" &&
+                      styles.menuIconCircleDisabled,
                   ]}
                 >
-                  <item.icon color={COLORS.white} size={20} />
+                  {isGeneratingPDF && item.label === "Export Report" ? (
+                    <ActivityIndicator size="small" color={COLORS.white} />
+                  ) : (
+                    <item.icon color={COLORS.white} size={20} />
+                  )}
                 </View>
-                <Text style={styles.menuLabel}>{item.label}</Text>
+                <Text style={styles.menuLabel}>
+                  {item.label}
+                  {isGeneratingPDF && item.label === "Export Report"
+                    ? " (Generating...)"
+                    : ""}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -304,6 +418,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginRight: 15,
+  },
+  menuIconCircleDisabled: {
+    opacity: 0.6,
   },
   menuLabel: {
     fontSize: 15,

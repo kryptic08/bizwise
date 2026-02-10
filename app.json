@@ -38,6 +38,13 @@
     "plugins": [
       "expo-router",
       [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow BizWise to save PDF reports to your device.",
+          "savePhotosPermission": "Allow BizWise to save PDF reports to your Downloads folder."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",

@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { api } from "../convex/_generated/api";
 import { useAuth } from "./context/AuthContext";
+import { checkFirstSale } from "./utils/notificationInit";
 
 const { width } = Dimensions.get("window");
 
@@ -110,6 +111,9 @@ export default function CheckoutScreen() {
         userId: user?.userId,
         clientTimestamp: Date.now(), // Pass device timestamp
       });
+
+      // Check if this is the first sale and send celebration
+      checkFirstSale(true).catch(console.error);
 
       Alert.alert(
         "Transaction Complete",

@@ -1,9 +1,11 @@
 import { useRouter } from "expo-router";
 import {
   ArrowLeft,
+  Bell,
   ChevronRight,
   HelpCircle,
   Lock,
+  Target,
   Trash2,
 } from "lucide-react-native";
 import React from "react";
@@ -32,13 +34,27 @@ export default function SettingsScreen() {
   const settingsOptions = [
     {
       id: 1,
+      title: "Target Income",
+      icon: Target,
+      color: COLORS.iconBlue,
+      onPress: () => router.push("/target-income"),
+    },
+    {
+      id: 2,
+      title: "Notifications",
+      icon: Bell,
+      color: COLORS.iconBlue,
+      onPress: () => router.push("/notification-settings"),
+    },
+    {
+      id: 3,
       title: "Password Settings",
       icon: Lock,
       color: COLORS.iconBlue,
       onPress: () => router.push("/change-password"),
     },
     {
-      id: 2,
+      id: 4,
       title: "Delete Account",
       icon: Trash2,
       color: COLORS.red,

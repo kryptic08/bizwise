@@ -40,23 +40,43 @@ const COLORS = {
   textGray: "#9ca3af",
 };
 
+// Available expense categories
+const EXPENSE_CATEGORIES = [
+  "Food",
+  "Office",
+  "Transportation",
+  "Utilities",
+  "Maintenance",
+  "Marketing",
+  "Medical",
+  "Equipment",
+  "General",
+];
+
 // OCR.space API configuration
 const OCR_API_URL = "https://api.ocr.space/parse/image";
 const OCR_API_KEY = process.env.EXPO_PUBLIC_OCR_API_KEY!;
+const OCR_API_KEY_BACKUP = "K84029735088957";
 
-// Google Gemini AI for direct parsing (primary)
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY!;
-const GEMINI_MODEL = "gemini-flash-lite-latest";
-
-// OpenRouter AI fallback chain (all free models)
-const OPENROUTER_API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY!;
-const OPENROUTER_MODELS = [
-  "meta-llama/llama-3.3-70b-instruct:free", // Best free model - try first after Gemini
-  "qwen/qwen3-32b:free", // GPT-class OSS
-  "meta-llama/llama-4-scout:free", // Llama scout
-  "deepseek/deepseek-r1-0528:free", // DeepSeek reasoning
-  "openrouter/free", // Auto-rotate all free models
+// Google AI models — rotate across all to maximize RPD (each ~20 RPD)
+// Round-robin API keys to multiply daily quota (3 keys = 3x daily limit)
+const GEMINI_API_KEYS = [
+  process.env.EXPO_PUBLIC_GEMINI_API_KEY_1!,
+  process.env.EXPO_PUBLIC_GEMINI_API_KEY_2!,
+  process.env.EXPO_PUBLIC_GEMINI_API_KEY_3!,
 ];
+let geminiApiKeyIndex = 0; // Round-robin counter for API keys
+
+const GOOGLE_AI_MODELS = [
+  "gemini-2.5-flash", // 20 RPD — best quality
+  "gemini-2.5-flash-lite", // 20 RPD — lighter/faster
+  "gemini-3-flash", // 20 RPD — newest
+  "gemma-3-27b-it", // 14.4K RPD — strong OSS
+  "gemma-3-12b-it", // 14.4K RPD — mid-size
+  "gemma-3-4b-it", // 14.4K RPD — small but fast
+];
+// Round-robin counter — persists across scans within session
+let googleModelIndex = 0;
 
 interface ExpenseItem {
   id: string;
@@ -97,7 +117,11 @@ export default function AddExpenseScreen() {
   const [showScanAnimation, setShowScanAnimation] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
   const [scanError, setScanError] = useState(false);
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [customCategory, setCustomCategory] = useState("");
   const lottieRef = useRef<LottieView>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const getCurrentDate = () => {
     const date = new Date();
@@ -123,6 +147,30 @@ export default function AddExpenseScreen() {
   const removeExpenseItem = (id: string) => {
     if (expenses.length > 1) {
       setExpenses(expenses.filter((item) => item.id !== id));
+    }
+  };
+
+  const openCategoryPicker = (itemId: string) => {
+    setSelectedItemId(itemId);
+    setCustomCategory("");
+    setShowCategoryPicker(true);
+  };
+
+  const selectCategory = (category: string) => {
+    if (selectedItemId) {
+      updateExpenseItem(selectedItemId, "category", category);
+    }
+    setShowCategoryPicker(false);
+    setSelectedItemId(null);
+    setCustomCategory("");
+  };
+
+  const selectCustomCategory = () => {
+    if (customCategory.trim() && selectedItemId) {
+      updateExpenseItem(selectedItemId, "category", customCategory.trim());
+      setShowCategoryPicker(false);
+      setSelectedItemId(null);
+      setCustomCategory("");
     }
   };
 
@@ -222,6 +270,22 @@ export default function AddExpenseScreen() {
                 clientTimestamp: Date.now(), // Pass device timestamp
               });
 
+              // Reset form after successful save
+              setExpenses([
+                {
+                  id: Date.now().toString(),
+                  category: "",
+                  title: "",
+                  amount: "",
+                  quantity: "",
+                  total: "0.00",
+                },
+              ]);
+              setCapturedImage(null);
+              setOcrText("");
+              setScanComplete(false);
+              setScanError(false);
+
               Alert.alert("Success", "Expenses saved successfully!", [
                 { text: "OK", onPress: () => router.back() },
               ]);
@@ -285,21 +349,114 @@ export default function AddExpenseScreen() {
     }
   };
 
+  // Helper: fetch with timeout (OCR.space can hang on free tier)
+  const fetchWithTimeout = async (
+    url: string,
+    options: RequestInit,
+    timeoutMs: number = 25000,
+  ): Promise<Response> => {
+    const controller = new AbortController();
+    const existingSignal = options.signal as AbortSignal | undefined;
+
+    // If caller already has an abort signal, listen for it
+    if (existingSignal) {
+      existingSignal.addEventListener("abort", () => controller.abort());
+    }
+
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if ((error as Error).name === "AbortError" && !existingSignal?.aborted) {
+        throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
+      }
+      throw error;
+    }
+  };
+
+  // Helper: try OCR.space with a specific engine and API key
+  const tryOCREngine = async (
+    base64Image: string,
+    engine: string,
+    signal: AbortSignal,
+    apiKey: string = OCR_API_KEY,
+  ): Promise<string> => {
+    console.log(
+      `🔍 Trying OCR.space Engine ${engine} (key: ${apiKey === OCR_API_KEY ? "primary" : "backup"})...`,
+    );
+
+    const formData = new FormData();
+    formData.append("apikey", apiKey);
+    formData.append("base64Image", `data:image/jpeg;base64,${base64Image}`);
+    formData.append("language", "eng");
+    formData.append("isOverlayRequired", "false");
+    formData.append("detectOrientation", "true");
+    formData.append("scale", "true");
+    formData.append("OCREngine", engine);
+
+    const response = await fetchWithTimeout(
+      OCR_API_URL,
+      { method: "POST", body: formData, signal },
+      25000, // 25 second timeout
+    );
+
+    console.log(`OCR Engine ${engine} response status:`, response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `OCR.space Engine ${engine}: ${response.status} - ${errorText}`,
+      );
+    }
+
+    const result = await response.json();
+    console.log(
+      `OCR Engine ${engine} result:`,
+      JSON.stringify(result).substring(0, 300),
+    );
+
+    if (result.ErrorMessage && result.ErrorMessage.length > 0) {
+      throw new Error(`OCR Engine ${engine}: ${result.ErrorMessage[0]}`);
+    }
+    if (result.IsErroredOnProcessing) {
+      throw new Error(`OCR Engine ${engine} processing error`);
+    }
+
+    const text = result.ParsedResults?.[0]?.ParsedText?.trim() || "";
+
+    if (!text) {
+      throw new Error(`OCR Engine ${engine}: no text extracted`);
+    }
+
+    return text;
+  };
+
   const processImageWithOCR = async (imageUri: string) => {
     setIsProcessing(true);
     setShowScanAnimation(true);
     setScanComplete(false);
     setScanError(false);
 
+    // Create abort controller for canceling requests
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
     try {
       console.log("Processing image URI:", imageUri);
 
-      // Compress and resize image for faster upload
+      // Compress and resize image for OCR.space (free tier limit ~1MB)
       console.log("Compressing image...");
       const compressedImage = await ImageManipulator.manipulateAsync(
         imageUri,
-        [{ resize: { width: 1200 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
+        [{ resize: { width: 800 } }], // Smaller to stay within free tier limits
+        { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG },
       );
       console.log("Compressed image URI:", compressedImage.uri);
 
@@ -309,50 +466,44 @@ export default function AddExpenseScreen() {
         { encoding: "base64" },
       );
 
-      console.log("Base64 image length:", base64Image?.length);
-      console.log("Starting OCR.space API...");
+      const base64SizeKB = Math.round((base64Image.length * 3) / 4 / 1024);
+      console.log(
+        `Base64 length: ${base64Image.length} chars (~${base64SizeKB} KB)`,
+      );
 
-      // ── OCR.space: Extract text from image ──
-      const formData = new FormData();
-      formData.append("apikey", OCR_API_KEY);
-      formData.append("base64Image", `data:image/jpeg;base64,${base64Image}`);
-      formData.append("language", "eng");
-      formData.append("isOverlayRequired", "false");
-      formData.append("detectOrientation", "true");
-      formData.append("scale", "true");
-      formData.append("OCREngine", "2");
-
-      console.log("Making OCR.space API request...");
-      const response = await fetch(OCR_API_URL, {
-        method: "POST",
-        body: formData,
-      });
-
-      console.log("OCR.space API response status:", response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `OCR.space API error: ${response.status} - ${errorText}`,
-        );
+      if (base64SizeKB > 900) {
+        console.warn("⚠️ Image may exceed OCR.space 1MB free tier limit");
       }
 
-      const result = await response.json();
+      console.log("OCR API Key present:", !!OCR_API_KEY);
+      console.log("Starting OCR.space API...");
 
+      // ── OCR.space: Try primary key → backup key (Engine 2 only) ──
       let extractedText = "";
-      if (
-        result.ParsedResults &&
-        result.ParsedResults[0] &&
-        result.ParsedResults[0].ParsedText
-      ) {
-        extractedText = result.ParsedResults[0].ParsedText.trim();
-        console.log("✅ OCR.space extracted text successfully");
-      } else if (result.ErrorMessage && result.ErrorMessage.length > 0) {
-        throw new Error(`OCR.space error: ${result.ErrorMessage[0]}`);
-      } else if (result.IsErroredOnProcessing) {
-        throw new Error("OCR.space processing error");
-      } else {
-        throw new Error("No text found in the image");
+
+      // Try with primary API key first
+      try {
+        extractedText = await tryOCREngine(base64Image, "2", signal);
+        console.log(`✅ Primary key extracted ${extractedText.length} chars`);
+      } catch (e1) {
+        if ((e1 as Error).name === "AbortError") throw e1;
+        console.warn("❌ Primary key failed:", (e1 as Error).message);
+
+        // Try backup API key
+        console.log("🔄 Switching to backup OCR API key...");
+        try {
+          extractedText = await tryOCREngine(
+            base64Image,
+            "2",
+            signal,
+            OCR_API_KEY_BACKUP,
+          );
+          console.log(`✅ Backup key extracted ${extractedText.length} chars`);
+        } catch (e2) {
+          if ((e2 as Error).name === "AbortError") throw e2;
+          console.error("❌ All OCR attempts failed");
+          throw new Error("OCR failed with both API keys. Please try again.");
+        }
       }
 
       console.log("Extracted text:", extractedText);
@@ -365,9 +516,15 @@ export default function AddExpenseScreen() {
         return; // Stop processing, don't send to AI
       }
 
-      // ── Gemini AI: Parse the OCR text into structured items ──
-      await parseReceiptWithAI(extractedText);
+      // ── Parse the OCR text into structured items ──
+      await parseReceiptWithAI(extractedText, signal);
     } catch (error) {
+      // Check if error is from abort
+      if ((error as Error).name === "AbortError") {
+        console.log("OCR process was cancelled by user");
+        return; // Don't show error, user intentionally cancelled
+      }
+
       console.error("OCR Error:", (error as Error).message);
 
       // Show error animation for OCR failures
@@ -375,8 +532,163 @@ export default function AddExpenseScreen() {
       setIsProcessing(false);
     } finally {
       setIsProcessing(false);
+      abortControllerRef.current = null;
     }
   };
+
+  // Detect receipt type from OCR text
+  const detectReceiptType = (
+    ocrText: string,
+  ): "electricity" | "grocery" | "labor" | "general" => {
+    const text = ocrText.toLowerCase();
+
+    // Check for electricity bill keywords
+    if (
+      text.includes("meralco") ||
+      text.includes("kwh") ||
+      text.includes("kilowatt") ||
+      (text.includes("electric") &&
+        (text.includes("bill") || text.includes("statement"))) ||
+      (text.includes("consumption") && text.includes("kwh"))
+    ) {
+      return "electricity";
+    }
+
+    // Check for labor/service keywords
+    if (
+      text.includes("labor") ||
+      text.includes("service charge") ||
+      text.includes("installation") ||
+      text.includes("repair") ||
+      text.includes("plumbing") ||
+      text.includes("electrician") ||
+      text.includes("carpenter") ||
+      text.includes("man hours") ||
+      text.includes("manpower")
+    ) {
+      return "labor";
+    }
+
+    // Check for grocery (multiple items pattern)
+    const lines = text.split("\n");
+    const itemLines = lines.filter((line) => {
+      const hasNumber = /\d/.test(line);
+      const hasPricePattern = /\d+\.?\d*/.test(line);
+      return hasNumber && hasPricePattern && line.length > 3;
+    });
+
+    // If there are many item-like lines, likely a grocery receipt
+    if (itemLines.length > 5) {
+      return "grocery";
+    }
+
+    return "general";
+  };
+
+  // Get specialized prompt based on receipt type
+  const getReceiptPromptByType = (
+    text: string,
+    type: "electricity" | "grocery" | "labor" | "general",
+  ) => {
+    if (type === "electricity") {
+      return `You are an expert at parsing electricity bills from the Philippines (especially MERALCO).
+
+IMPORTANT: Extract the total bill amount as a SINGLE expense item.
+
+For the electricity bill, provide:
+1. title: "Electricity Bill - [Month/Period]" (extract the billing period if visible)
+2. amount: The TOTAL AMOUNT DUE (look for "Amount Due", "Total Amount", "Current Charges")
+3. quantity: 1
+4. category: Utilities
+
+CRITICAL RULES:
+- Look for keywords: "AMOUNT DUE", "TOTAL AMOUNT", "CURRENT CHARGES", "TOTAL"
+- The bill amount is typically the largest number on the bill
+- Philippine pesos: amounts like "2345" = ₱2,345.00
+- Extract billing period/month if visible (e.g., "January 2026", "Dec 2025")
+- Return ONLY ONE item (the total bill), not individual charges
+- Return ONLY valid JSON array, no markdown, no explanations
+
+Receipt text:
+"""
+${text}
+"""
+
+Return ONLY a JSON array:
+[{"title": "Electricity Bill - January 2026", "amount": 2345.50, "quantity": 1, "category": "Utilities"}]
+
+If you cannot find the bill amount, return: []`;
+    }
+
+    if (type === "labor") {
+      return `You are an expert at parsing labor/service receipts from the Philippines.
+
+Extract labor charges and services provided.
+
+For each service/labor charge, provide:
+1. title: Description of the service (e.g., "Plumbing Repair", "Electrical Installation")
+2. amount: The charge amount
+3. quantity: Hours or count (default to 1)
+4. category: Maintenance (or Equipment if equipment-related)
+
+CRITICAL RULES:
+- Look for service descriptions, man-hours, labor charges
+- Common terms: "labor", "service", "repair", "installation", "man hours"
+- Philippine pesos: "500" = ₱500.00
+- Separate materials from labor if both are listed
+- If only total labor cost is shown, create one item for it
+- Return ONLY valid JSON array, no markdown
+
+Receipt text:
+"""
+${text}
+"""
+
+Return ONLY a JSON array:
+[{"title": "Plumbing Repair", "amount": 500, "quantity": 1, "category": "Maintenance"}]
+
+If no clear labor charges found, return: []`;
+    }
+
+    if (type === "grocery") {
+      return `You are an expert at parsing grocery receipts from the Philippines.
+
+Extract ALL individual items purchased from the grocery store.
+
+For each item, provide:
+1. title: Product name (cleaned up, capitalized)
+2. amount: Unit price per item
+3. quantity: Number purchased (look for "x2", "qty:2", etc.)
+4. category: Food (or General for non-food items)
+
+CRITICAL RULES:
+- Each item is on ONE LINE: "ITEM NAME  PRICE"
+- Extract ALL items, not just a few
+- Skip: TOTAL, SUBTOTAL, CHANGE, TAX, VAT, DISCOUNT
+- Skip: Store name, address, date, cashier, receipt number
+- Philippine pesos: "45" = ₱45.00, "12.50" = ₱12.50
+- Common stores: 7-Eleven, Mini Stop, SM Supermarket, Puregold, Robinsons
+- Items may include: vegetables, meat, fish, snacks, drinks, household items
+- Return ONLY valid JSON array, no markdown
+
+Receipt text:
+"""
+${text}
+"""
+
+Return ONLY a JSON array:
+[{"title": "Rice", "amount": 45, "quantity": 2, "category": "Food"}, {"title": "Cooking Oil", "amount": 85, "quantity": 1, "category": "Food"}]
+
+If no items found, return: []`;
+    }
+
+    // General prompt (fallback)
+    return getReceiptPrompt(text);
+  };
+
+  // ══════════════════════════════════════════════════════════
+  // NOTE: Simple regex parser removed — AI models handle parsing
+  // ══════════════════════════════════════════════════════════
 
   // Receipt parsing prompt (shared between Gemini and OpenRouter)
   const getReceiptPrompt = (text: string) =>
@@ -438,96 +750,77 @@ If no items found or text is unclear, return: []`;
     }
   };
 
-  // Try Gemini AI first
-  const tryGemini = async (text: string): Promise<any[] | null> => {
-    console.log("Trying Gemini AI...");
+  // Try Gemini API (works for both Gemini and Gemma models)
+  const tryGeminiAPI = async (
+    text: string,
+    model: string,
+    receiptType: "electricity" | "grocery" | "labor" | "general",
+    signal?: AbortSignal,
+  ): Promise<any[] | null> => {
+    // Get current API key and rotate to next one for next request
+    const currentApiKey = GEMINI_API_KEYS[geminiApiKeyIndex];
+    const keyNumber = geminiApiKeyIndex + 1;
+    geminiApiKeyIndex = (geminiApiKeyIndex + 1) % GEMINI_API_KEYS.length;
+
+    console.log(
+      `Trying Google AI (${model}) with API key #${keyNumber} for ${receiptType} receipt...`,
+    );
+    const prompt = getReceiptPromptByType(text, receiptType);
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentApiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: getReceiptPrompt(text) }] }],
+          contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
         }),
+        signal: signal,
       },
     );
 
-    if (!response.ok) throw new Error(`Gemini error: ${response.status}`);
+    if (!response.ok) throw new Error(`${model} error: ${response.status}`);
 
     const result = await response.json();
     const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
     return extractItemsFromAIResponse(aiText);
   };
 
-  // Try OpenRouter AI with a specific model
-  const tryOpenRouterModel = async (
-    text: string,
-    model: string,
-  ): Promise<any[] | null> => {
-    console.log(`Trying OpenRouter: ${model}...`);
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "https://bizwise.app",
-          "X-Title": "BizWise Expense Manager",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "user",
-              content: getReceiptPrompt(text),
-            },
-          ],
-          temperature: 0.1,
-          max_tokens: 2048,
-        }),
-      },
-    );
+  // Parse receipt text using AI with round-robin rotation:
+  // Google AI models only (rotating through all 6 models)
+  const parseReceiptWithAI = async (text: string, signal?: AbortSignal) => {
+    console.log("Parsing receipt...");
 
-    if (!response.ok)
-      throw new Error(`OpenRouter ${model}: ${response.status}`);
-
-    const result = await response.json();
-    const aiText = result.choices?.[0]?.message?.content || "";
-    return extractItemsFromAIResponse(aiText);
-  };
-
-  // Parse receipt text using AI with fallback chain:
-  // Gemini → Nemotron → Qwen → Llama → DeepSeek → openrouter/free → regex
-  const parseReceiptWithAI = async (text: string) => {
-    console.log("Parsing receipt with AI...");
+    // Detect receipt type first
+    const receiptType = detectReceiptType(text);
+    console.log(`📋 Detected receipt type: ${receiptType}`);
 
     let items: any[] | null = null;
 
-    // 1. Try Gemini first (fastest)
-    try {
-      items = await tryGemini(text);
-      if (items && items.length > 0) {
-        console.log(`✅ Gemini parsed ${items.length} items`);
-      }
-    } catch (e) {
-      console.warn("❌ Gemini failed:", e);
-    }
-
-    // 2. Try OpenRouter models in order until one works
-    if (!items || items.length === 0) {
-      for (const model of OPENROUTER_MODELS) {
-        try {
-          items = await tryOpenRouterModel(text, model);
-          if (items && items.length > 0) {
-            console.log(`✅ ${model} parsed ${items.length} items`);
-            break;
-          }
-        } catch (e) {
-          console.warn(`❌ ${model} failed:`, e);
+    // Rotate through ALL Google AI models to spread RPD usage
+    const startIndex = googleModelIndex;
+    for (let i = 0; i < GOOGLE_AI_MODELS.length; i++) {
+      const idx = (startIndex + i) % GOOGLE_AI_MODELS.length;
+      const model = GOOGLE_AI_MODELS[idx];
+      try {
+        console.log(
+          `🔄 Trying Google AI: ${model} (slot ${idx + 1}/${GOOGLE_AI_MODELS.length})...`,
+        );
+        items = await tryGeminiAPI(text, model, receiptType, signal);
+        if (items && items.length > 0) {
+          console.log(`✅ ${model} parsed ${items.length} items`);
+          // Advance rotation to NEXT model for the next scan
+          googleModelIndex = (idx + 1) % GOOGLE_AI_MODELS.length;
+          break;
         }
+      } catch (e) {
+        if ((e as Error).name === "AbortError") throw e;
+        console.warn(`❌ ${model} failed:`, e);
       }
+    }
+    // Advance rotation even if all failed, so next scan starts fresh
+    if (!items || items.length === 0) {
+      googleModelIndex = (startIndex + 1) % GOOGLE_AI_MODELS.length;
     }
 
     // Process items if any AI succeeded
@@ -1218,6 +1511,23 @@ TOTAL: ₱615.00`,
     closeOCRView();
   };
 
+  const cancelScan = () => {
+    // Abort any ongoing requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Reset all scan-related states
+    setIsProcessing(false);
+    setShowScanAnimation(false);
+    setScanComplete(false);
+    setScanError(false);
+    setShowCamera(false);
+    setCapturedImage(null);
+    setOcrText("");
+  };
+
   const clearScan = () => {
     Alert.alert(
       "Clear Scan",
@@ -1298,8 +1608,16 @@ TOTAL: ₱615.00`,
 
               {/* Category Dropdown */}
               <Text style={styles.inputLabel}>Category</Text>
-              <TouchableOpacity style={styles.dropdownInput}>
-                <Text style={styles.dropdownText}>
+              <TouchableOpacity
+                style={styles.dropdownInput}
+                onPress={() => openCategoryPicker(item.id)}
+              >
+                <Text
+                  style={[
+                    styles.dropdownText,
+                    !item.category && styles.placeholderText,
+                  ]}
+                >
                   {item.category || "Select Category"}
                 </Text>
                 <ChevronDown color={COLORS.textGray} size={20} />
@@ -1467,6 +1785,71 @@ TOTAL: ₱615.00`,
         </View>
       </Modal>
 
+      {/* Category Picker Modal */}
+      <Modal
+        visible={showCategoryPicker}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowCategoryPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.categoryPickerContainer}>
+            <View style={styles.categoryPickerHeader}>
+              <Text style={styles.categoryPickerTitle}>Select Category</Text>
+              <TouchableOpacity onPress={() => setShowCategoryPicker(false)}>
+                <X color={COLORS.textDark} size={24} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Custom Category Input */}
+            <View style={styles.customCategoryContainer}>
+              <Text style={styles.customCategoryLabel}>Or type your own:</Text>
+              <View style={styles.customInputRow}>
+                <TextInput
+                  style={styles.customCategoryInput}
+                  placeholder="Enter custom category"
+                  placeholderTextColor={COLORS.textGray}
+                  value={customCategory}
+                  onChangeText={setCustomCategory}
+                  onSubmitEditing={selectCustomCategory}
+                  returnKeyType="done"
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.customCategoryButton,
+                    !customCategory.trim() &&
+                      styles.customCategoryButtonDisabled,
+                  ]}
+                  onPress={selectCustomCategory}
+                  disabled={!customCategory.trim()}
+                >
+                  <Text style={styles.customCategoryButtonText}>Add</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Divider */}
+            <View style={styles.categoryDivider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or choose from list</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            <ScrollView style={styles.categoryList}>
+              {EXPENSE_CATEGORIES.map((category) => (
+                <TouchableOpacity
+                  key={category}
+                  style={styles.categoryItem}
+                  onPress={() => selectCategory(category)}
+                >
+                  <Text style={styles.categoryItemText}>{category}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* OCR Camera Modal */}
       <Modal
         visible={showCamera}
@@ -1595,6 +1978,16 @@ TOTAL: ₱615.00`,
               <Text style={styles.animationSubText}>
                 Items detected successfully.{"\n"}Review and adjust as needed.
               </Text>
+            )}
+
+            {/* Show cancel button while processing */}
+            {!scanError && !scanComplete && isProcessing && (
+              <TouchableOpacity
+                style={[styles.animationButton, styles.cancelButton]}
+                onPress={cancelScan}
+              >
+                <Text style={styles.animationButtonText}>Cancel</Text>
+              </TouchableOpacity>
             )}
 
             {/* Show button when animation completes (error or success) */}
@@ -2157,10 +2550,113 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     minWidth: 200,
   },
+  cancelButton: {
+    backgroundColor: COLORS.textGray,
+  },
   animationButtonText: {
     color: COLORS.white,
     fontSize: 16,
     fontWeight: "600",
     textAlign: "center",
+  },
+
+  // Category Picker Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  categoryPickerContainer: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: "70%",
+  },
+  categoryPickerHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+  },
+  categoryPickerTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  categoryList: {
+    maxHeight: 400,
+  },
+  categoryItem: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f3f4f6",
+  },
+  categoryItemText: {
+    fontSize: 16,
+    color: COLORS.textDark,
+  },
+  placeholderText: {
+    color: COLORS.textGray,
+  },
+  customCategoryContainer: {
+    padding: 20,
+    paddingBottom: 0,
+  },
+  customCategoryLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.textDark,
+    marginBottom: 10,
+  },
+  customInputRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  customCategoryInput: {
+    flex: 1,
+    backgroundColor: "#f9fafb",
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: COLORS.textDark,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  customCategoryButton: {
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 10,
+    paddingHorizontal: 20,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  customCategoryButtonDisabled: {
+    backgroundColor: COLORS.textGray,
+    opacity: 0.5,
+  },
+  customCategoryButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  categoryDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#e5e7eb",
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    fontSize: 12,
+    color: COLORS.textGray,
+    textTransform: "uppercase",
   },
 });

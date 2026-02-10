@@ -342,3 +342,44 @@ export const updateProfilePicture = mutation({
     };
   },
 });
+
+// Update user's target income
+export const updateTargetIncome = mutation({
+  args: {
+    userId: v.id("users"),
+    monthly: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const daily = args.monthly / 30;
+
+    await ctx.db.patch(args.userId, {
+      targetIncome: {
+        monthly: args.monthly,
+        daily: daily,
+        updatedAt: Date.now(),
+      },
+    });
+
+    return {
+      success: true,
+      monthly: args.monthly,
+      daily: daily,
+    };
+  },
+});
+
+// Get user's target income
+export const getTargetIncome = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+
+    return user.targetIncome || null;
+  },
+});

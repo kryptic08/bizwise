@@ -85,7 +85,8 @@ export const addProduct = mutation({
   args: {
     userId: v.id("users"),
     name: v.string(),
-    category: v.string(),
+    category: v.string(), // Legacy field
+    categoryId: v.optional(v.id("categories")), // New field
     price: v.number(),
     imageStorageId: v.optional(v.id("_storage")),
     image: v.string(),
@@ -95,6 +96,7 @@ export const addProduct = mutation({
       userId: args.userId,
       name: args.name,
       category: args.category,
+      categoryId: args.categoryId,
       price: args.price,
       imageStorageId: args.imageStorageId,
       image: args.image,

@@ -28,9 +28,9 @@ const FAQ_DATA = [
   },
   {
     id: 2,
-    question: "How To contact support",
+    question: "How to contact support",
     answer:
-      "You can contact our support team through multiple channels: Visit our website at www.bizwise-support.com, message us on Facebook at facebook.com/BizWiseOfficial, WhatsApp us at +63 912 345 6789, or reach us on Instagram @bizwise.app",
+      "You can contact our support team via email at bizwise.official@gmail.com or text/call us at +639292305818. We're here to help!",
   },
   {
     id: 3,
@@ -46,9 +46,9 @@ const FAQ_DATA = [
   },
   {
     id: 5,
-    question: "Can I use the app offline?",
+    question: "Does the app work offline?",
     answer:
-      "BizWise requires an internet connection for most features to sync your data in real-time. However, you can view previously loaded data offline. Any changes made offline will sync automatically once you're back online.",
+      "BizWise requires an active internet connection to work properly. All your data is securely stored and synced in the cloud in real-time, ensuring your business information is always backed up and accessible from any device.",
   },
 ];
 

@@ -1,7 +1,7 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { ArrowLeft, Pencil, Plus } from "lucide-react-native";
+import { ArrowLeft, Pencil, Plus, Settings } from "lucide-react-native";
 import React, { useMemo, useState } from "react";
 import {
   Dimensions,
@@ -45,89 +45,100 @@ export default function CounterScreen() {
   const router = useRouter();
   const { user } = useAuth();
 
-  // Fetch products from Convex
+  // Fetch products and categories from Convex
   const allProducts = useQuery(
     api.products.getProducts,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
+  const categories = useQuery(
+    api.categories.getCategories,
     user?.userId ? { userId: user.userId } : "skip",
   );
 
   // Mutations
   const updateProduct = useMutation(api.products.updateProduct);
+  const migrateDefaults = useMutation(api.categories.migrateDefaultCategories);
 
   // Local quantity state for each product
   const [quantities, setQuantities] = useState<Record<string, number>>({});
 
-  // Edit mode state
+  // Edit mode state (per category)
   const [editMode, setEditMode] = useState<Record<string, boolean>>({});
 
+  // Migrate default categories if none exist
+  React.useEffect(() => {
+    if (categories && categories.length === 0 && user?.userId) {
+      migrateDefaults({ userId: user.userId })
+        .then(() => console.log("Default categories migrated"))
+        .catch(console.error);
+    }
+  }, [categories, user?.userId]);
+
   // Group products by category with quantity state
-  const products = useMemo(() => {
-    if (!allProducts) return { snacks: [], riceMeals: [], drinks: [] };
+  const productsByCategory = useMemo(() => {
+    if (!allProducts || !categories) return {};
 
     const productsWithQty = allProducts.map((product) => ({
       ...product,
       qty: quantities[product._id] || 0,
     }));
 
-    return {
-      snacks: productsWithQty.filter((p) => p.category === "snacks"),
-      riceMeals: productsWithQty.filter((p) => p.category === "riceMeals"),
-      drinks: productsWithQty.filter((p) => p.category === "drinks"),
-    };
-  }, [allProducts, quantities]);
+    // Group products by categoryId
+    const grouped: Record<string, typeof productsWithQty> = {};
 
-  const updateQuantity = (
-    category: "snacks" | "riceMeals" | "drinks",
-    id: string,
-    delta: number,
-  ) => {
+    categories.forEach((category) => {
+      grouped[category._id] = productsWithQty.filter(
+        (p) => p.categoryId === category._id,
+      );
+    });
+
+    return grouped;
+  }, [allProducts, categories, quantities]);
+
+  const updateQuantity = (id: string, delta: number) => {
     setQuantities((prev) => ({
       ...prev,
       [id]: Math.max(0, (prev[id] || 0) + delta),
     }));
   };
 
-  const toggleEditMode = (category: "snacks" | "riceMeals" | "drinks") => {
+  const toggleEditMode = (categoryId: string) => {
     setEditMode((prev) => ({
       ...prev,
-      [category]: !prev[category],
+      [categoryId]: !prev[categoryId],
     }));
   };
 
   const getTotalAmount = () => {
-    return [...products.snacks, ...products.riceMeals, ...products.drinks]
-      .reduce((sum, item) => sum + item.price * item.qty, 0)
+    if (!allProducts) return "0.00";
+
+    return allProducts
+      .reduce((sum, item) => {
+        const qty = quantities[item._id] || 0;
+        return sum + item.price * qty;
+      }, 0)
       .toFixed(2);
   };
 
   const getTotalItems = () => {
-    return [
-      ...products.snacks,
-      ...products.riceMeals,
-      ...products.drinks,
-    ].reduce((sum, item) => sum + item.qty, 0);
+    return Object.values(quantities).reduce((sum, qty) => sum + qty, 0);
   };
 
-  const renderProductCard = (
-    item: Product,
-    category: "snacks" | "riceMeals" | "drinks",
-  ) => (
+  const renderProductCard = (item: Product, categoryId: string) => (
     <TouchableOpacity
       key={item._id}
       style={styles.card}
       activeOpacity={0.85}
       onPress={() => {
-        if (editMode[category]) {
+        if (editMode[categoryId]) {
           // Navigate to edit screen in edit mode
           router.push(`/edit-item?id=${item._id}`);
         } else {
           // Add to cart in normal mode
-          updateQuantity(category, item._id, 1);
+          updateQuantity(item._id, 1);
         }
       }}
-      onLongPress={() =>
-        !editMode[category] && updateQuantity(category, item._id, 5)
-      }
+      onLongPress={() => !editMode[categoryId] && updateQuantity(item._id, 5)}
       delayLongPress={250}
     >
       <View style={styles.imageContainer}>
@@ -137,7 +148,7 @@ export default function CounterScreen() {
           resizeMode="cover"
         />
         {/* Edit indicator in edit mode */}
-        {editMode[category] && (
+        {editMode[categoryId] && (
           <View style={styles.editIndicator}>
             <Text style={styles.editIndicatorText}>✎</Text>
           </View>
@@ -151,14 +162,12 @@ export default function CounterScreen() {
         <Text style={styles.productPrice}>₱ {item.price.toFixed(2)}</Text>
       </View>
 
-      {!editMode[category] && (
+      {!editMode[categoryId] && (
         <TouchableOpacity
           style={styles.counterBox}
           activeOpacity={0.8}
-          onPress={() => item.qty > 0 && updateQuantity(category, item._id, -1)}
-          onLongPress={() =>
-            item.qty > 0 && updateQuantity(category, item._id, -5)
-          }
+          onPress={() => item.qty > 0 && updateQuantity(item._id, -1)}
+          onLongPress={() => item.qty > 0 && updateQuantity(item._id, -5)}
           delayLongPress={250}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
@@ -168,8 +177,8 @@ export default function CounterScreen() {
     </TouchableOpacity>
   );
 
-  // Show loading state if products are not yet loaded
-  if (allProducts === undefined) {
+  // Show loading state if products or categories are not yet loaded
+  if (allProducts === undefined || categories === undefined) {
     return (
       <View
         style={[
@@ -182,7 +191,7 @@ export default function CounterScreen() {
           backgroundColor={COLORS.primaryBlue}
         />
         <Text style={[styles.headerTitle, { color: COLORS.white }]}>
-          Loading products...
+          Loading...
         </Text>
       </View>
     );
@@ -203,91 +212,78 @@ export default function CounterScreen() {
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Counter</Text>
-        <TouchableOpacity style={styles.iconButton}>
-          <HelpTooltip
-            title="Counter Help"
-            content="To add items: Press the product image. To remove items: Press the number in the bottom-right corner. Use the pencil icon to edit products, or the plus icon to add new items to your inventory."
-          />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => router.push("/manage-categories")}
+          >
+            <Settings color={COLORS.white} size={24} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconButton}>
+            <HelpTooltip
+              title="Counter Help"
+              content="To add items: Press the product image. To remove items: Press the number in the bottom-right corner. Use the pencil icon to edit products, or the plus icon to add new items. Use the gear icon to manage categories."
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>SNACKS</Text>
-          <View style={styles.editIcons}>
-            <TouchableOpacity
-              style={[
-                styles.circleAction,
-                editMode["snacks"] && styles.circleActionActive,
-              ]}
-              onPress={() => toggleEditMode("snacks")}
-            >
-              <Pencil size={14} color={COLORS.white} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.circleAction}
-              onPress={() => router.push("/add-item")}
-            >
-              <Plus size={16} color={COLORS.white} />
-            </TouchableOpacity>
+        {categories.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>No categories yet</Text>
+            <Text style={styles.emptySubtext}>
+              Tap the gear icon to create categories for your products
+            </Text>
           </View>
-        </View>
-        <View style={styles.gridContainer}>
-          {products.snacks.map((item) => renderProductCard(item, "snacks"))}
-        </View>
+        ) : (
+          categories.map((category) => {
+            const products = productsByCategory[category._id] || [];
 
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>RICE MEAL</Text>
-          <View style={styles.editIcons}>
-            <TouchableOpacity
-              style={[
-                styles.circleAction,
-                editMode["riceMeals"] && styles.circleActionActive,
-              ]}
-              onPress={() => toggleEditMode("riceMeals")}
-            >
-              <Pencil size={14} color={COLORS.white} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.circleAction}
-              onPress={() => router.push("/add-item")}
-            >
-              <Plus size={16} color={COLORS.white} />
-            </TouchableOpacity>
-          </View>
-        </View>
-        <View style={styles.gridContainer}>
-          {products.riceMeals.map((item) =>
-            renderProductCard(item, "riceMeals"),
-          )}
-        </View>
-
-        <View style={[styles.sectionHeader, { marginTop: 10 }]}>
-          <Text style={styles.sectionTitle}>DRINKS</Text>
-          <View style={styles.editIcons}>
-            <TouchableOpacity
-              style={[
-                styles.circleAction,
-                editMode["drinks"] && styles.circleActionActive,
-              ]}
-              onPress={() => toggleEditMode("drinks")}
-            >
-              <Pencil size={14} color={COLORS.white} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.circleAction}
-              onPress={() => router.push("/add-item")}
-            >
-              <Plus size={16} color={COLORS.white} />
-            </TouchableOpacity>
-          </View>
-        </View>
-        <View style={[styles.gridContainer, { marginBottom: 20 }]}>
-          {products.drinks.map((item) => renderProductCard(item, "drinks"))}
-        </View>
+            return (
+              <View key={category._id}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>
+                    {category.name.toUpperCase()}
+                  </Text>
+                  <View style={styles.editIcons}>
+                    <TouchableOpacity
+                      style={[
+                        styles.circleAction,
+                        editMode[category._id] && styles.circleActionActive,
+                      ]}
+                      onPress={() => toggleEditMode(category._id)}
+                    >
+                      <Pencil size={14} color={COLORS.white} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.circleAction}
+                      onPress={() =>
+                        router.push(`/add-item?categoryId=${category._id}`)
+                      }
+                    >
+                      <Plus size={16} color={COLORS.white} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={styles.gridContainer}>
+                  {products.length === 0 ? (
+                    <Text style={styles.emptyCategory}>
+                      No products in this category
+                    </Text>
+                  ) : (
+                    products.map((item) =>
+                      renderProductCard(item, category._id),
+                    )
+                  )}
+                </View>
+              </View>
+            );
+          })
+        )}
       </ScrollView>
 
       <View style={styles.footerContainer}>
@@ -299,12 +295,10 @@ export default function CounterScreen() {
           style={styles.checkoutButton}
           onPress={() => {
             const totalItems = getTotalItems();
-            if (totalItems > 0) {
-              const cartItems = [
-                ...products.snacks,
-                ...products.riceMeals,
-                ...products.drinks,
-              ].filter((item) => item.qty > 0);
+            if (totalItems > 0 && allProducts) {
+              const cartItems = allProducts
+                .map((p) => ({ ...p, qty: quantities[p._id] || 0 }))
+                .filter((item) => item.qty > 0);
 
               router.push({
                 pathname: "/checkout",
@@ -344,6 +338,10 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: COLORS.white,
   },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   iconButton: {
     padding: 5,
   },
@@ -354,6 +352,30 @@ const styles = StyleSheet.create({
     height: 26,
     justifyContent: "center",
     alignItems: "center",
+  },
+
+  emptyState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 60,
+  },
+  emptyText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: COLORS.textDark,
+    marginBottom: 8,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: COLORS.textGray,
+    textAlign: "center",
+    paddingHorizontal: 40,
+  },
+  emptyCategory: {
+    fontSize: 13,
+    color: COLORS.textGray,
+    fontStyle: "italic",
+    paddingVertical: 20,
   },
 
   scrollContent: {

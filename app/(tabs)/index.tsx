@@ -1,4 +1,5 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
@@ -7,10 +8,11 @@ import {
   Coins,
   LayoutGrid,
   Receipt,
+  Target,
   Utensils,
   Wallet,
 } from "lucide-react-native";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
@@ -25,6 +27,8 @@ import {
 import Svg, { Circle, G, Line } from "react-native-svg";
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
+import { checkTargetProgress } from "../utils/notificationChecker";
+import { NotificationSettings } from "../utils/notificationService";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -91,7 +95,7 @@ export default function HomeScreen() {
   );
   const monthlyAnalytics = useQuery(
     api.analytics.getMonthlyAnalytics,
-    user?.userId ? { months: 6, userId: user.userId } : "skip",
+    user?.userId ? { userId: user.userId } : "skip",
   );
   const topProduct = useQuery(
     api.analytics.getTopSellingProduct,
@@ -101,6 +105,39 @@ export default function HomeScreen() {
     api.analytics.getTopSellingCategory,
     user?.userId ? { userId: user.userId } : "skip",
   );
+  const targetProgress = useQuery(
+    api.analytics.getTargetProgress,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
+
+  // Check target progress and trigger notifications
+  useEffect(() => {
+    if (!targetProgress || !user?.userId) return;
+
+    const checkNotifications = async () => {
+      try {
+        // Load notification settings
+        const settingsJson = await AsyncStorage.getItem(
+          "bizwise_notification_settings",
+        );
+        const settings: NotificationSettings = settingsJson
+          ? JSON.parse(settingsJson)
+          : {
+              enabled: true,
+              targetReminders: true,
+              dailySummary: true,
+              weeklyReport: true,
+            };
+
+        // Check target progress and send notifications if needed
+        await checkTargetProgress(targetProgress, settings);
+      } catch (error) {
+        console.error("Error checking notifications:", error);
+      }
+    };
+
+    checkNotifications();
+  }, [targetProgress, user?.userId]);
 
   // Format the analytics based on active tab
   const chartData = useMemo(() => {
@@ -202,7 +239,16 @@ export default function HomeScreen() {
   // Get labels for x-axis based on active tab
   const chartLabels = useMemo(() => {
     if (activeTab === "Daily") {
-      return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      if (!dailyAnalytics)
+        return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      return dailyAnalytics
+        .slice(-7)
+        .map(
+          (day) =>
+            ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+              new Date(day.date).getDay()
+            ],
+        );
     } else if (activeTab === "Weekly") {
       return ["W1", "W2", "W3", "W4", "W5", "W6", "W7"];
     } else {
@@ -210,7 +256,118 @@ export default function HomeScreen() {
         ? monthlyAnalytics.slice(-6).map((m) => m.month)
         : ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
     }
-  }, [activeTab, monthlyAnalytics]);
+  }, [activeTab, dailyAnalytics, monthlyAnalytics]);
+
+  // Generate dynamic profit analysis text
+  const profitAnalysisText = useMemo(() => {
+    // Check if data is empty (all zeros)
+    if (profitChartData.every((p) => p === 0)) {
+      return ""; // No text for empty graph
+    }
+
+    const totalProfit = profitChartData.reduce((sum, val) => sum + val, 0);
+    const avgProfit = totalProfit / profitChartData.length;
+
+    // Calculate trend (compare last 3 vs first 3 data points)
+    if (profitChartData.length >= 4) {
+      const firstHalf = profitChartData.slice(
+        0,
+        Math.floor(profitChartData.length / 2),
+      );
+      const secondHalf = profitChartData.slice(
+        Math.floor(profitChartData.length / 2),
+      );
+      const firstAvg =
+        firstHalf.reduce((sum, val) => sum + val, 0) / firstHalf.length;
+      const secondAvg =
+        secondHalf.reduce((sum, val) => sum + val, 0) / secondHalf.length;
+
+      if (firstAvg === 0 && secondAvg === 0) {
+        return ""; // No meaningful data
+      }
+
+      const growthRate =
+        firstAvg > 0 ? ((secondAvg - firstAvg) / firstAvg) * 100 : 0;
+
+      if (growthRate > 15) {
+        return `🎉 Excellent! Profit grew by ${Math.round(growthRate)}% this period. Keep up the great work!`;
+      } else if (growthRate > 5) {
+        return `📈 Good progress! Profit increased by ${Math.round(growthRate)}% with steady growth.`;
+      } else if (growthRate > -5) {
+        return `✅ Profit is stable. Consistent performance this period!`;
+      } else if (growthRate > -15) {
+        return `⚠️ Profit decreased by ${Math.abs(Math.round(growthRate))}%. Consider reviewing expenses.`;
+      } else {
+        return `📉 Profit down by ${Math.abs(Math.round(growthRate))}%. Focus on boosting sales and reducing costs.`;
+      }
+    }
+
+    // Fallback for shorter data sets
+    if (avgProfit > 1000) {
+      return "✅ Strong profit performance! Keep maintaining this momentum.";
+    } else if (avgProfit > 0) {
+      return "📊 Positive profit. Continue optimizing your operations.";
+    } else {
+      return "";
+    }
+  }, [profitChartData]);
+
+  // Generate dynamic income/expense analysis text
+  const incomeExpenseAnalysisText = useMemo(() => {
+    // Check if data is empty (all zeros)
+    if (chartData.every((d) => d.inc === 0 && d.exp === 0)) {
+      return ""; // No text for empty graph
+    }
+
+    const totalIncome = chartData.reduce((sum, d) => sum + d.inc, 0);
+    const totalExpense = chartData.reduce((sum, d) => sum + d.exp, 0);
+    const avgIncome = totalIncome / chartData.length;
+    const avgExpense = totalExpense / chartData.length;
+
+    if (totalIncome === 0 && totalExpense === 0) {
+      return ""; // No meaningful data
+    }
+
+    // Calculate expense ratio
+    const expenseRatio =
+      totalIncome > 0 ? (totalExpense / totalIncome) * 100 : 0;
+    const profitMargin =
+      totalIncome > 0 ? ((totalIncome - totalExpense) / totalIncome) * 100 : 0;
+
+    // Income trend
+    const incomeGrowth =
+      chartData.length >= 4
+        ? (() => {
+            const firstHalf = chartData.slice(
+              0,
+              Math.floor(chartData.length / 2),
+            );
+            const secondHalf = chartData.slice(
+              Math.floor(chartData.length / 2),
+            );
+            const firstAvg =
+              firstHalf.reduce((sum, d) => sum + d.inc, 0) / firstHalf.length;
+            const secondAvg =
+              secondHalf.reduce((sum, d) => sum + d.inc, 0) / secondHalf.length;
+            return firstAvg > 0 ? ((secondAvg - firstAvg) / firstAvg) * 100 : 0;
+          })()
+        : 0;
+
+    // Generate insights
+    if (profitMargin > 50) {
+      return `🌟 Excellent financial control! ${Math.round(profitMargin)}% profit margin with well-managed expenses.`;
+    } else if (profitMargin > 30) {
+      return `💰 Great balance! Income is ${incomeGrowth > 0 ? "growing" : "stable"} while expenses remain controlled.`;
+    } else if (profitMargin > 10) {
+      return `📊 Healthy finances with ${Math.round(profitMargin)}% profit margin. Room for optimization.`;
+    } else if (profitMargin > 0) {
+      return `⚠️ Tight margins at ${Math.round(profitMargin)}%. Consider reducing expenses or increasing income.`;
+    } else if (totalExpense > totalIncome) {
+      return `🚨 Expenses exceed income by ₱${Math.abs(totalExpense - totalIncome).toFixed(0)}. Take action to balance finances.`;
+    } else {
+      return "📈 Keep tracking your finances for better insights over time.";
+    }
+  }, [chartData]);
 
   const handleCardPress = (type: "balance" | "expense") => {
     Animated.sequence([
@@ -339,6 +496,113 @@ export default function HomeScreen() {
               </View>
             </View>
           </View>
+
+          {/* Target Income Progress */}
+          {targetProgress && (
+            <TouchableOpacity
+              style={styles.targetCard}
+              onPress={() => router.push("/target-income")}
+              activeOpacity={0.8}
+            >
+              <View style={styles.targetHeader}>
+                <Text style={styles.targetTitle}>Monthly Target Progress</Text>
+                <Target color={COLORS.primaryBlue} size={20} />
+              </View>
+
+              <View style={styles.targetProgress}>
+                <View style={styles.progressBarBg}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        width: `${Math.min(100, targetProgress.progressPercentage)}%`,
+                        backgroundColor:
+                          targetProgress.status === "ahead"
+                            ? COLORS.green
+                            : targetProgress.status === "on-track"
+                              ? COLORS.primaryBlue
+                              : COLORS.red,
+                      },
+                    ]}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.targetStats}>
+                <View style={styles.targetStat}>
+                  <Text style={styles.targetStatLabel}>Current</Text>
+                  <Text
+                    style={[styles.targetStatValue, { color: COLORS.green }]}
+                  >
+                    ₱
+                    {targetProgress.current.toLocaleString("en-US", {
+                      minimumFractionDigits: 0,
+                      maximumFractionDigits: 0,
+                    })}
+                  </Text>
+                </View>
+                <View style={styles.targetStat}>
+                  <Text style={styles.targetStatLabel}>Target</Text>
+                  <Text
+                    style={[
+                      styles.targetStatValue,
+                      { color: COLORS.primaryBlue },
+                    ]}
+                  >
+                    ₱
+                    {targetProgress.target.toLocaleString("en-US", {
+                      minimumFractionDigits: 0,
+                      maximumFractionDigits: 0,
+                    })}
+                  </Text>
+                </View>
+                <View style={styles.targetStat}>
+                  <Text style={styles.targetStatLabel}>
+                    {targetProgress.remaining > 0 ? "Remaining" : "Exceeded"}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.targetStatValue,
+                      {
+                        color:
+                          targetProgress.remaining > 0
+                            ? COLORS.textGray
+                            : COLORS.green,
+                      },
+                    ]}
+                  >
+                    ₱
+                    {Math.abs(targetProgress.remaining).toLocaleString(
+                      "en-US",
+                      {
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 0,
+                      },
+                    )}
+                  </Text>
+                </View>
+              </View>
+
+              {targetProgress.status === "behind" &&
+                targetProgress.daysRemaining > 0 && (
+                  <Text style={styles.targetMessage}>
+                    ⚠️ Need ₱{targetProgress.requiredDailyIncome.toFixed(0)}/day
+                    to reach target
+                  </Text>
+                )}
+              {targetProgress.status === "ahead" && (
+                <Text style={styles.targetMessageSuccess}>
+                  🎉 Congratulations! You've exceeded your target!
+                </Text>
+              )}
+              {targetProgress.status === "on-track" &&
+                targetProgress.daysRemaining > 0 && (
+                  <Text style={styles.targetMessageOnTrack}>
+                    👍 On track! Keep up the good work!
+                  </Text>
+                )}
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Main White Content Area */}
@@ -528,9 +792,9 @@ export default function HomeScreen() {
                   : "0.00"}
               </Text>
             </View>
-            <Text style={styles.analysisText}>
-              Profit grew by 10% this week. Great progress overall.
-            </Text>
+            {profitAnalysisText && (
+              <Text style={styles.analysisText}>{profitAnalysisText}</Text>
+            )}
           </View>
 
           {/* Income & Expenses Section */}
@@ -622,10 +886,11 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            <Text style={styles.analysisTextCentered}>
-              Your income is growing steadily while expenses remain consistent.
-              Great financial control!
-            </Text>
+            {incomeExpenseAnalysisText && (
+              <Text style={styles.analysisTextCentered}>
+                {incomeExpenseAnalysisText}
+              </Text>
+            )}
           </View>
         </View>
       </ScrollView>
@@ -956,5 +1221,75 @@ const styles = StyleSheet.create({
     color: COLORS.red,
     fontWeight: "700",
     marginTop: 2,
+  },
+
+  // Target Income Card
+  targetCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    padding: 15,
+    marginTop: 15,
+  },
+  targetHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  targetTitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.textDark,
+  },
+  targetProgress: {
+    marginBottom: 15,
+  },
+  progressBarBg: {
+    height: 8,
+    backgroundColor: COLORS.borderLight,
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  progressBarFill: {
+    height: "100%",
+    borderRadius: 4,
+  },
+  targetStats: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  targetStat: {
+    flex: 1,
+    alignItems: "center",
+  },
+  targetStatLabel: {
+    fontSize: 10,
+    color: COLORS.textGray,
+    marginBottom: 4,
+  },
+  targetStatValue: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  targetMessage: {
+    marginTop: 12,
+    fontSize: 11,
+    color: COLORS.red,
+    textAlign: "center",
+    fontWeight: "600",
+  },
+  targetMessageSuccess: {
+    marginTop: 12,
+    fontSize: 11,
+    color: COLORS.green,
+    textAlign: "center",
+    fontWeight: "600",
+  },
+  targetMessageOnTrack: {
+    marginTop: 12,
+    fontSize: 11,
+    color: COLORS.primaryBlue,
+    textAlign: "center",
+    fontWeight: "600",
   },
 });

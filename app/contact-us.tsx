@@ -2,9 +2,7 @@ import { useRouter } from "expo-router";
 import {
   ArrowLeft,
   ExternalLink,
-  Facebook,
   Globe,
-  Instagram,
   MessageCircle,
 } from "lucide-react-native";
 import React from "react";
@@ -31,30 +29,16 @@ const CONTACT_OPTIONS = [
   {
     id: 1,
     icon: Globe,
-    label: "Website",
-    value: "www.bizwise-support.com",
-    url: "https://www.bizwise-support.com",
+    label: "Email",
+    value: "bizwise.official@gmail.com",
+    url: "mailto:bizwise.official@gmail.com",
   },
   {
     id: 2,
-    icon: Facebook,
-    label: "Facebook",
-    value: "facebook.com/BizWiseOfficial",
-    url: "https://facebook.com/BizWiseOfficial",
-  },
-  {
-    id: 3,
     icon: MessageCircle,
-    label: "WhatsApp",
-    value: "+63 912 345 6789",
-    url: "https://wa.me/639123456789",
-  },
-  {
-    id: 4,
-    icon: Instagram,
-    label: "Instagram",
-    value: "@bizwise.app",
-    url: "https://instagram.com/bizwise.app",
+    label: "Text or Call",
+    value: "+639292305818",
+    url: "tel:+639292305818",
   },
 ];
 

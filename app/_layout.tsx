@@ -6,6 +6,7 @@ import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import ConvexClientProvider from "./providers/ConvexClientProvider";
+import { initializeNotifications } from "./utils/notificationInit";
 
 export const unstable_settings = {
   initialRouteName: "welcome",
@@ -36,6 +37,13 @@ function RootLayoutNav() {
 
     return () => clearTimeout(timer);
   }, []);
+
+  // Initialize notifications when user is logged in
+  useEffect(() => {
+    if (user && !isPinLocked && !isLoading) {
+      initializeNotifications().catch(console.error);
+    }
+  }, [user, isPinLocked, isLoading]);
 
   // Handle auth and PIN lock routing
   useEffect(() => {
@@ -108,6 +116,15 @@ function RootLayoutNav() {
         <Stack.Screen name="change-pin" options={{ headerShown: false }} />
         <Stack.Screen name="delete-account" options={{ headerShown: false }} />
         <Stack.Screen name="terms" options={{ headerShown: false }} />
+        <Stack.Screen name="target-income" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="notification-settings"
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="manage-categories"
+          options={{ headerShown: false }}
+        />
         <Stack.Screen
           name="modal"
           options={{ presentation: "modal", title: "Modal" }}
