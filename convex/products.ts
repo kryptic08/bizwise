@@ -113,6 +113,7 @@ export const updateProduct = mutation({
     id: v.id("products"),
     name: v.optional(v.string()),
     category: v.optional(v.string()),
+    categoryId: v.optional(v.id("categories")),
     price: v.optional(v.number()),
     imageStorageId: v.optional(v.id("_storage")),
     image: v.optional(v.string()),

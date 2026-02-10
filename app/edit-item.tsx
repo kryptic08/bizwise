@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { api } from "../convex/_generated/api";
+import { Id } from "../convex/_generated/dataModel";
 import { useAuth } from "./context/AuthContext";
 
 const COLORS = {
@@ -25,13 +26,6 @@ const COLORS = {
   textGray: "#6b7280",
   borderGray: "#d1d5db",
   red: "#ff5c5c",
-};
-
-const CATEGORIES = ["snacks", "riceMeals", "drinks"];
-const CATEGORY_DISPLAY_NAMES = {
-  snacks: "Snacks",
-  riceMeals: "Rice Meal",
-  drinks: "Drinks",
 };
 
 export default function EditItemScreen() {
@@ -46,6 +40,12 @@ export default function EditItemScreen() {
   );
   const product = allProducts?.find((p) => p._id === id);
 
+  // Fetch user's categories from DB
+  const categories = useQuery(
+    api.categories.getCategories,
+    user?.userId ? { userId: user.userId } : "skip",
+  );
+
   // Mutations
   const updateProduct = useMutation(api.products.updateProduct);
   const deleteProduct = useMutation(api.products.deleteProduct);
@@ -53,7 +53,7 @@ export default function EditItemScreen() {
 
   const [formData, setFormData] = useState({
     name: "",
-    category: "",
+    categoryId: "",
     price: "",
     image: "",
   });
@@ -64,7 +64,7 @@ export default function EditItemScreen() {
     if (product) {
       setFormData({
         name: product.name,
-        category: product.category,
+        categoryId: product.categoryId || "",
         price: product.price.toString(),
         image: product.image,
       });
@@ -140,7 +140,7 @@ export default function EditItemScreen() {
   };
 
   const handleSave = async () => {
-    if (!formData.name || !formData.category || !formData.price) {
+    if (!formData.name || !formData.categoryId || !formData.price) {
       Alert.alert("Error", "Please fill in all required fields");
       return;
     }
@@ -152,6 +152,14 @@ export default function EditItemScreen() {
 
     setIsLoading(true);
     try {
+      // Get category details
+      const selectedCategory = categories?.find(
+        (c) => c._id === formData.categoryId,
+      );
+      if (!selectedCategory) {
+        throw new Error("Invalid category selected");
+      }
+
       // Upload new image to Convex if changed and is local URI
       let imageStorageId = undefined;
       if (formData.image && formData.image.startsWith("file://")) {
@@ -161,7 +169,8 @@ export default function EditItemScreen() {
       await updateProduct({
         id: id as any,
         name: formData.name,
-        category: formData.category,
+        category: selectedCategory.name,
+        categoryId: formData.categoryId as Id<"categories">,
         price: parseFloat(formData.price),
         imageStorageId,
         image: formData.image,
@@ -311,32 +320,39 @@ export default function EditItemScreen() {
           {/* Category Section */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Category *</Text>
-            <View style={styles.categoryContainer}>
-              {CATEGORIES.map((category) => (
-                <TouchableOpacity
-                  key={category}
-                  style={[
-                    styles.categoryChip,
-                    formData.category === category && styles.categoryChipActive,
-                  ]}
-                  onPress={() => setFormData({ ...formData, category })}
-                >
-                  <Text
+            {categories === undefined ? (
+              <Text style={styles.loadingText}>Loading categories...</Text>
+            ) : categories.length === 0 ? (
+              <Text style={styles.emptyText}>
+                No categories available. Please create categories first.
+              </Text>
+            ) : (
+              <View style={styles.categoryContainer}>
+                {categories.map((category) => (
+                  <TouchableOpacity
+                    key={category._id}
                     style={[
-                      styles.categoryText,
-                      formData.category === category &&
-                        styles.categoryTextActive,
+                      styles.categoryChip,
+                      formData.categoryId === category._id &&
+                        styles.categoryChipActive,
                     ]}
-                  >
-                    {
-                      CATEGORY_DISPLAY_NAMES[
-                        category as keyof typeof CATEGORY_DISPLAY_NAMES
-                      ]
+                    onPress={() =>
+                      setFormData({ ...formData, categoryId: category._id })
                     }
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                  >
+                    <Text
+                      style={[
+                        styles.categoryText,
+                        formData.categoryId === category._id &&
+                          styles.categoryTextActive,
+                      ]}
+                    >
+                      {category.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
           </View>
 
           {/* Price Section */}
@@ -485,6 +501,15 @@ const styles = StyleSheet.create({
   },
   categoryTextActive: {
     color: COLORS.white,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: COLORS.textGray,
+    fontStyle: "italic",
+  },
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textGray,
   },
   saveButton: {
     position: "absolute",
