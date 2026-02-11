@@ -278,6 +278,7 @@ export default function ProfileScreen() {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          scrollEnabled={false}
         >
           {/* Spacer for profile image */}
           <View style={{ height: 70 }} />
@@ -747,7 +748,8 @@ const styles = StyleSheet.create({
   menuContainer: {
     width: "100%",
     paddingHorizontal: 30,
-    marginTop: 100,
+    marginTop: 25,
+    paddingTop: 40,
   },
   menuItem: {
     flexDirection: "row",

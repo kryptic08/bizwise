@@ -1,8 +1,8 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
 import { useMutation } from "convex/react";
-import { CameraView, FlashMode, useCameraPermissions } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import LottieView from "lottie-react-native";
 import {
@@ -12,14 +12,11 @@ import {
   Plus,
   Trash2,
   X,
-  Zap,
-  ZapOff,
 } from "lucide-react-native";
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
   ScrollView,
   StatusBar,
@@ -42,24 +39,16 @@ const COLORS = {
 
 // Available expense categories
 const EXPENSE_CATEGORIES = [
-  "Food",
-  "Office",
-  "Transportation",
+  "Raw Materials",
+  "Packaging Materials",
+  "Store Supplies",
   "Utilities",
-  "Maintenance",
-  "Marketing",
-  "Medical",
   "Equipment",
+  "Transportation",
   "General",
 ];
 
-// OCR.space API configuration
-const OCR_API_URL = "https://api.ocr.space/parse/image";
-const OCR_API_KEY = process.env.EXPO_PUBLIC_OCR_API_KEY!;
-const OCR_API_KEY_BACKUP = "K84029735088957";
-
-// Google AI models — rotate across all to maximize RPD (each ~20 RPD)
-// Round-robin API keys to multiply daily quota (3 keys = 3x daily limit)
+// Google Gemini Vision API - round-robin across models and API keys
 const GEMINI_API_KEYS = [
   process.env.EXPO_PUBLIC_GEMINI_API_KEY_1!,
   process.env.EXPO_PUBLIC_GEMINI_API_KEY_2!,
@@ -68,12 +57,13 @@ const GEMINI_API_KEYS = [
 let geminiApiKeyIndex = 0; // Round-robin counter for API keys
 
 const GOOGLE_AI_MODELS = [
-  "gemini-2.5-flash", // 20 RPD — best quality
-  "gemini-2.5-flash-lite", // 20 RPD — lighter/faster
-  "gemini-3-flash", // 20 RPD — newest
-  "gemma-3-27b-it", // 14.4K RPD — strong OSS
-  "gemma-3-12b-it", // 14.4K RPD — mid-size
-  "gemma-3-4b-it", // 14.4K RPD — small but fast
+  "gemini-3-pro-preview",
+  "gemini-2.5-pro",
+  "gemini-flash-latest",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-flash-lite-latest",
+  "gemini-2.5-flash-lite",
 ];
 // Round-robin counter — persists across scans within session
 let googleModelIndex = 0;
@@ -90,8 +80,6 @@ interface ExpenseItem {
 export default function AddExpenseScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const cameraRef = useRef<CameraView>(null);
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   // Convex mutations
   const addExpenseGroup = useMutation(api.expenses.addExpenseGroup);
@@ -107,19 +95,16 @@ export default function AddExpenseScreen() {
       total: "0.00",
     },
   ]);
-  const [showCamera, setShowCamera] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [ocrText, setOcrText] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showCameraView, setShowCameraView] = useState(false);
-  const [flashMode, setFlashMode] = useState<FlashMode>("off");
   const [showScanAnimation, setShowScanAnimation] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
   const [scanError, setScanError] = useState(false);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [customCategory, setCustomCategory] = useState("");
+  const [processingMessage, setProcessingMessage] = useState("");
   const lottieRef = useRef<LottieView>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -131,6 +116,33 @@ export default function AddExpenseScreen() {
       year: "numeric",
     });
   };
+
+  // Cycling processing messages
+  const PROCESSING_MESSAGES = [
+    "Sending image to be processed...",
+    "Please wait a moment...",
+    "Please don't cancel, it will waste resources...",
+    "Please be patient...",
+    "The server is taking a bit longer...",
+    "Almost there...",
+  ];
+
+  useEffect(() => {
+    let messageIndex = 0;
+    let interval: ReturnType<typeof setInterval>;
+
+    if (isProcessing && showScanAnimation) {
+      setProcessingMessage(PROCESSING_MESSAGES[0]);
+      interval = setInterval(() => {
+        messageIndex = (messageIndex + 1) % PROCESSING_MESSAGES.length;
+        setProcessingMessage(PROCESSING_MESSAGES[messageIndex]);
+      }, 4000); // Change message every 4 seconds
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isProcessing, showScanAnimation]);
 
   const addExpenseItem = () => {
     const newItem: ExpenseItem = {
@@ -265,7 +277,6 @@ export default function AddExpenseScreen() {
 
               await addExpenseGroup({
                 items,
-                ocrText: ocrText || undefined, // Only store OCR text, not the image
                 userId: user?.userId!,
                 clientTimestamp: Date.now(), // Pass device timestamp
               });
@@ -282,7 +293,6 @@ export default function AddExpenseScreen() {
                 },
               ]);
               setCapturedImage(null);
-              setOcrText("");
               setScanComplete(false);
               setScanError(false);
 
@@ -304,141 +314,76 @@ export default function AddExpenseScreen() {
     );
   };
 
+  // Simplified: Take photo with native crop UI
   const handleOpenCamera = async () => {
-    if (!cameraPermission) {
-      return;
-    }
+    try {
+      // Request camera permission
+      const permissionResult =
+        await ImagePicker.requestCameraPermissionsAsync();
 
-    if (!cameraPermission.granted) {
-      const result = await requestCameraPermission();
-      if (!result.granted) {
+      if (!permissionResult.granted) {
         Alert.alert(
-          "Permission needed",
-          "Camera permission is required to scan receipts",
+          "Permission Required",
+          "Camera permission is needed to take photos.",
         );
         return;
       }
-    }
 
-    setShowCameraView(true);
-    setShowCamera(false);
-    setCapturedImage(null);
-    setOcrText("");
-  };
+      // Launch camera with built-in crop tool
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true, // Enables native crop UI
+        quality: 0.8,
+        aspect: undefined, // Free-form cropping
+      });
 
-  const toggleFlash = () => {
-    setFlashMode((current) => (current === "off" ? "on" : "off"));
-  };
-
-  const takePicture = async () => {
-    if (cameraRef.current) {
-      try {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.5,
-        });
-        if (photo) {
-          setCapturedImage(photo.uri);
-          setShowCameraView(false);
-          setShowCamera(true);
-          processImageWithOCR(photo.uri);
-        }
-      } catch (error) {
-        console.error("Error taking picture:", error);
-        Alert.alert("Error", "Failed to take picture");
+      if (!result.canceled && result.assets[0]) {
+        // User has taken and cropped the photo
+        await processWithImage(result.assets[0].uri);
       }
+    } catch (error) {
+      console.error("Error taking picture:", error);
+      Alert.alert("Error", "Failed to take picture. Please try again.");
     }
   };
 
-  // Helper: fetch with timeout (OCR.space can hang on free tier)
-  const fetchWithTimeout = async (
-    url: string,
-    options: RequestInit,
-    timeoutMs: number = 25000,
-  ): Promise<Response> => {
-    const controller = new AbortController();
-    const existingSignal = options.signal as AbortSignal | undefined;
+  // Process with automatic resize
+  const processWithImage = async (imageUri: string) => {
+    try {
+      // Resize for optimal processing
+      const processedImage = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [{ resize: { width: 1200 } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
+      );
 
-    // If caller already has an abort signal, listen for it
-    if (existingSignal) {
-      existingSignal.addEventListener("abort", () => controller.abort());
+      setCapturedImage(processedImage.uri);
+      setShowScanAnimation(true);
+      await processImageDirectly(processedImage.uri);
+    } catch (error) {
+      console.error("Error processing image:", error);
+      Alert.alert("Error", "Failed to process image. Please try again.");
     }
+  };
 
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  // Process image directly without auto-cropping
+  const processImageDirectly = async (imageUri: string) => {
+    setIsProcessing(true);
 
     try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      return response;
+      // Process with Gemini Vision API
+      await processImageWithGeminiVision(imageUri);
     } catch (error) {
-      clearTimeout(timeoutId);
-      if ((error as Error).name === "AbortError" && !existingSignal?.aborted) {
-        throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
-      }
-      throw error;
+      console.error("Processing error:", error);
+      Alert.alert("Error", "Failed to process image. Please try again.");
+      setScanError(true);
+      setIsProcessing(false);
+      setShowScanAnimation(false);
     }
   };
 
-  // Helper: try OCR.space with a specific engine and API key
-  const tryOCREngine = async (
-    base64Image: string,
-    engine: string,
-    signal: AbortSignal,
-    apiKey: string = OCR_API_KEY,
-  ): Promise<string> => {
-    console.log(
-      `🔍 Trying OCR.space Engine ${engine} (key: ${apiKey === OCR_API_KEY ? "primary" : "backup"})...`,
-    );
-
-    const formData = new FormData();
-    formData.append("apikey", apiKey);
-    formData.append("base64Image", `data:image/jpeg;base64,${base64Image}`);
-    formData.append("language", "eng");
-    formData.append("isOverlayRequired", "false");
-    formData.append("detectOrientation", "true");
-    formData.append("scale", "true");
-    formData.append("OCREngine", engine);
-
-    const response = await fetchWithTimeout(
-      OCR_API_URL,
-      { method: "POST", body: formData, signal },
-      25000, // 25 second timeout
-    );
-
-    console.log(`OCR Engine ${engine} response status:`, response.status);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `OCR.space Engine ${engine}: ${response.status} - ${errorText}`,
-      );
-    }
-
-    const result = await response.json();
-    console.log(
-      `OCR Engine ${engine} result:`,
-      JSON.stringify(result).substring(0, 300),
-    );
-
-    if (result.ErrorMessage && result.ErrorMessage.length > 0) {
-      throw new Error(`OCR Engine ${engine}: ${result.ErrorMessage[0]}`);
-    }
-    if (result.IsErroredOnProcessing) {
-      throw new Error(`OCR Engine ${engine} processing error`);
-    }
-
-    const text = result.ParsedResults?.[0]?.ParsedText?.trim() || "";
-
-    if (!text) {
-      throw new Error(`OCR Engine ${engine}: no text extracted`);
-    }
-
-    return text;
-  };
-
-  const processImageWithOCR = async (imageUri: string) => {
+  // Process image directly with Gemini Vision API (no OCR needed)
+  const processImageWithGeminiVision = async (imageUri: string) => {
     setIsProcessing(true);
     setShowScanAnimation(true);
     setScanComplete(false);
@@ -449,241 +394,33 @@ export default function AddExpenseScreen() {
     const signal = abortControllerRef.current.signal;
 
     try {
-      console.log("Processing image URI:", imageUri);
+      console.log("Processing image with Gemini Vision API...");
 
-      // Compress and resize image for OCR.space (free tier limit ~1MB)
-      console.log("Compressing image...");
-      const compressedImage = await ImageManipulator.manipulateAsync(
-        imageUri,
-        [{ resize: { width: 800 } }], // Smaller to stay within free tier limits
-        { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG },
-      );
-      console.log("Compressed image URI:", compressedImage.uri);
+      // Convert to base64 for Gemini API
+      const base64Image = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: "base64",
+      });
 
-      // Convert to base64 for OCR.space
-      const base64Image = await FileSystem.readAsStringAsync(
-        compressedImage.uri,
-        { encoding: "base64" },
-      );
-
-      const base64SizeKB = Math.round((base64Image.length * 3) / 4 / 1024);
       console.log(
-        `Base64 length: ${base64Image.length} chars (~${base64SizeKB} KB)`,
+        `Image size: ~${Math.round((base64Image.length * 3) / 4 / 1024)} KB`,
       );
 
-      if (base64SizeKB > 900) {
-        console.warn("⚠️ Image may exceed OCR.space 1MB free tier limit");
-      }
-
-      console.log("OCR API Key present:", !!OCR_API_KEY);
-      console.log("Starting OCR.space API...");
-
-      // ── OCR.space: Try primary key → backup key (Engine 2 only) ──
-      let extractedText = "";
-
-      // Try with primary API key first
-      try {
-        extractedText = await tryOCREngine(base64Image, "2", signal);
-        console.log(`✅ Primary key extracted ${extractedText.length} chars`);
-      } catch (e1) {
-        if ((e1 as Error).name === "AbortError") throw e1;
-        console.warn("❌ Primary key failed:", (e1 as Error).message);
-
-        // Try backup API key
-        console.log("🔄 Switching to backup OCR API key...");
-        try {
-          extractedText = await tryOCREngine(
-            base64Image,
-            "2",
-            signal,
-            OCR_API_KEY_BACKUP,
-          );
-          console.log(`✅ Backup key extracted ${extractedText.length} chars`);
-        } catch (e2) {
-          if ((e2 as Error).name === "AbortError") throw e2;
-          console.error("❌ All OCR attempts failed");
-          throw new Error("OCR failed with both API keys. Please try again.");
-        }
-      }
-
-      console.log("Extracted text:", extractedText);
-      setOcrText(extractedText);
-
-      // Check if text is empty or too short to be a receipt
-      if (!extractedText || extractedText.length < 10) {
-        console.log("❌ No meaningful text found in image");
-        setScanError(true);
-        return; // Stop processing, don't send to AI
-      }
-
-      // ── Parse the OCR text into structured items ──
-      await parseReceiptWithAI(extractedText, signal);
+      // Parse receipt with Gemini Vision AI
+      await parseReceiptWithGeminiVision(base64Image, signal);
     } catch (error) {
       // Check if error is from abort
       if ((error as Error).name === "AbortError") {
-        console.log("OCR process was cancelled by user");
-        return; // Don't show error, user intentionally cancelled
+        console.log("Processing was cancelled by user");
+        return;
       }
 
-      console.error("OCR Error:", (error as Error).message);
-
-      // Show error animation for OCR failures
+      console.error("Gemini Vision Error:", (error as Error).message);
       setScanError(true);
       setIsProcessing(false);
     } finally {
       setIsProcessing(false);
       abortControllerRef.current = null;
     }
-  };
-
-  // Detect receipt type from OCR text
-  const detectReceiptType = (
-    ocrText: string,
-  ): "electricity" | "grocery" | "labor" | "general" => {
-    const text = ocrText.toLowerCase();
-
-    // Check for electricity bill keywords
-    if (
-      text.includes("meralco") ||
-      text.includes("kwh") ||
-      text.includes("kilowatt") ||
-      (text.includes("electric") &&
-        (text.includes("bill") || text.includes("statement"))) ||
-      (text.includes("consumption") && text.includes("kwh"))
-    ) {
-      return "electricity";
-    }
-
-    // Check for labor/service keywords
-    if (
-      text.includes("labor") ||
-      text.includes("service charge") ||
-      text.includes("installation") ||
-      text.includes("repair") ||
-      text.includes("plumbing") ||
-      text.includes("electrician") ||
-      text.includes("carpenter") ||
-      text.includes("man hours") ||
-      text.includes("manpower")
-    ) {
-      return "labor";
-    }
-
-    // Check for grocery (multiple items pattern)
-    const lines = text.split("\n");
-    const itemLines = lines.filter((line) => {
-      const hasNumber = /\d/.test(line);
-      const hasPricePattern = /\d+\.?\d*/.test(line);
-      return hasNumber && hasPricePattern && line.length > 3;
-    });
-
-    // If there are many item-like lines, likely a grocery receipt
-    if (itemLines.length > 5) {
-      return "grocery";
-    }
-
-    return "general";
-  };
-
-  // Get specialized prompt based on receipt type
-  const getReceiptPromptByType = (
-    text: string,
-    type: "electricity" | "grocery" | "labor" | "general",
-  ) => {
-    if (type === "electricity") {
-      return `You are an expert at parsing electricity bills from the Philippines (especially MERALCO).
-
-IMPORTANT: Extract the total bill amount as a SINGLE expense item.
-
-For the electricity bill, provide:
-1. title: "Electricity Bill - [Month/Period]" (extract the billing period if visible)
-2. amount: The TOTAL AMOUNT DUE (look for "Amount Due", "Total Amount", "Current Charges")
-3. quantity: 1
-4. category: Utilities
-
-CRITICAL RULES:
-- Look for keywords: "AMOUNT DUE", "TOTAL AMOUNT", "CURRENT CHARGES", "TOTAL"
-- The bill amount is typically the largest number on the bill
-- Philippine pesos: amounts like "2345" = ₱2,345.00
-- Extract billing period/month if visible (e.g., "January 2026", "Dec 2025")
-- Return ONLY ONE item (the total bill), not individual charges
-- Return ONLY valid JSON array, no markdown, no explanations
-
-Receipt text:
-"""
-${text}
-"""
-
-Return ONLY a JSON array:
-[{"title": "Electricity Bill - January 2026", "amount": 2345.50, "quantity": 1, "category": "Utilities"}]
-
-If you cannot find the bill amount, return: []`;
-    }
-
-    if (type === "labor") {
-      return `You are an expert at parsing labor/service receipts from the Philippines.
-
-Extract labor charges and services provided.
-
-For each service/labor charge, provide:
-1. title: Description of the service (e.g., "Plumbing Repair", "Electrical Installation")
-2. amount: The charge amount
-3. quantity: Hours or count (default to 1)
-4. category: Maintenance (or Equipment if equipment-related)
-
-CRITICAL RULES:
-- Look for service descriptions, man-hours, labor charges
-- Common terms: "labor", "service", "repair", "installation", "man hours"
-- Philippine pesos: "500" = ₱500.00
-- Separate materials from labor if both are listed
-- If only total labor cost is shown, create one item for it
-- Return ONLY valid JSON array, no markdown
-
-Receipt text:
-"""
-${text}
-"""
-
-Return ONLY a JSON array:
-[{"title": "Plumbing Repair", "amount": 500, "quantity": 1, "category": "Maintenance"}]
-
-If no clear labor charges found, return: []`;
-    }
-
-    if (type === "grocery") {
-      return `You are an expert at parsing grocery receipts from the Philippines.
-
-Extract ALL individual items purchased from the grocery store.
-
-For each item, provide:
-1. title: Product name (cleaned up, capitalized)
-2. amount: Unit price per item
-3. quantity: Number purchased (look for "x2", "qty:2", etc.)
-4. category: Food (or General for non-food items)
-
-CRITICAL RULES:
-- Each item is on ONE LINE: "ITEM NAME  PRICE"
-- Extract ALL items, not just a few
-- Skip: TOTAL, SUBTOTAL, CHANGE, TAX, VAT, DISCOUNT
-- Skip: Store name, address, date, cashier, receipt number
-- Philippine pesos: "45" = ₱45.00, "12.50" = ₱12.50
-- Common stores: 7-Eleven, Mini Stop, SM Supermarket, Puregold, Robinsons
-- Items may include: vegetables, meat, fish, snacks, drinks, household items
-- Return ONLY valid JSON array, no markdown
-
-Receipt text:
-"""
-${text}
-"""
-
-Return ONLY a JSON array:
-[{"title": "Rice", "amount": 45, "quantity": 2, "category": "Food"}, {"title": "Cooking Oil", "amount": 85, "quantity": 1, "category": "Food"}]
-
-If no items found, return: []`;
-    }
-
-    // General prompt (fallback)
-    return getReceiptPrompt(text);
   };
 
   // ══════════════════════════════════════════════════════════
@@ -700,7 +437,16 @@ For each item found, provide:
 1. title: The name of the item (clean it up, capitalize properly)
 2. amount: The unit price (number only, no currency symbol)
 3. quantity: How many were purchased (default to 1 if not specified)
-4. category: One of these categories: Food, Office, Transportation, Utilities, Maintenance, Marketing, Medical, Equipment, General
+4. category: One of these categories: Raw Materials, Packaging Materials, Store Supplies, Utilities, Equipment, Transportation, General
+
+CATEGORY GUIDELINES:
+- Raw Materials: ingredients, food items, meat, vegetables, flour, sugar, etc.
+- Packaging Materials: boxes, bags, containers, wrappers, bottles, labels
+- Store Supplies: cleaning items, paper, pens, office supplies, uniforms
+- Utilities: electricity, water, internet bills
+- Equipment: machines, appliances, tools, hardware
+- Transportation: fuel, gas, vehicle-related, delivery
+- General: anything that doesn't fit other categories
 
 CRITICAL RULES FOR PHILIPPINE RECEIPTS:
 - Each item appears on ONE LINE ONLY in receipts - DO NOT combine multiple lines into one item name
@@ -726,7 +472,7 @@ ${text}
 """
 
 Return ONLY a JSON array (raw JSON, no code blocks, no markdown):
-[{"title": "Sisig", "amount": 150, "quantity": 1, "category": "Food"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Food"}]
+[{"title": "Chicken Breast", "amount": 150, "quantity": 1, "category": "Raw Materials"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}]
 
 If no items found or text is unclear, return: []`;
 
@@ -750,65 +496,105 @@ If no items found or text is unclear, return: []`;
     }
   };
 
-  // Try Gemini API (works for both Gemini and Gemma models)
-  const tryGeminiAPI = async (
-    text: string,
-    model: string,
-    receiptType: "electricity" | "grocery" | "labor" | "general",
+  // Parse receipt image directly with Gemini Vision API (no OCR step)
+  const parseReceiptWithGeminiVision = async (
+    base64Image: string,
     signal?: AbortSignal,
-  ): Promise<any[] | null> => {
-    // Get current API key and rotate to next one for next request
-    const currentApiKey = GEMINI_API_KEYS[geminiApiKeyIndex];
-    const keyNumber = geminiApiKeyIndex + 1;
-    geminiApiKeyIndex = (geminiApiKeyIndex + 1) % GEMINI_API_KEYS.length;
+  ) => {
+    console.log("Parsing receipt with Gemini Vision...");
 
-    console.log(
-      `Trying Google AI (${model}) with API key #${keyNumber} for ${receiptType} receipt...`,
-    );
-    const prompt = getReceiptPromptByType(text, receiptType);
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentApiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
-        }),
-        signal: signal,
-      },
-    );
+    // Vision-optimized prompt
+    const visionPrompt = `You are an expert at analyzing receipt images from the Philippines. Look at this receipt image and extract ALL items that are visible.
 
-    if (!response.ok) throw new Error(`${model} error: ${response.status}`);
+IMPORTANT: DO NOT MAKE UP, INVENT, OR HALLUCINATE ANY ITEMS. Only extract what you can actually see in the image.
 
-    const result = await response.json();
-    const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    return extractItemsFromAIResponse(aiText);
-  };
+For each item found, provide:
+1. title: The name of the item (clean it up, capitalize properly)
+2. amount: The unit price (number only, no currency symbol)
+3. quantity: How many were purchased (default to 1 if not specified)
+4. category: One of these categories: Raw Materials, Packaging Materials, Store Supplies, Utilities, Equipment, Transportation, General
 
-  // Parse receipt text using AI with round-robin rotation:
-  // Google AI models only (rotating through all 6 models)
-  const parseReceiptWithAI = async (text: string, signal?: AbortSignal) => {
-    console.log("Parsing receipt...");
+CATEGORY GUIDELINES:
+- Raw Materials: ingredients, food items, meat, vegetables, flour, sugar, etc.
+- Packaging Materials: boxes, bags, containers, wrappers, bottles, labels
+- Store Supplies: cleaning items, paper, pens, office supplies, uniforms
+- Utilities: electricity, water, internet bills
+- Equipment: machines, appliances, tools, hardware
+- Transportation: fuel, gas, vehicle-related, delivery
+- General: anything that doesn't fit other categories
 
-    // Detect receipt type first
-    const receiptType = detectReceiptType(text);
-    console.log(`📋 Detected receipt type: ${receiptType}`);
+CRITICAL RULES FOR PHILIPPINE RECEIPTS:
+- Many receipts are HANDWRITTEN and may not have PHP/₱ symbols
+- Amounts like "2345" or "1500" are Philippine pesos (don't divide by 100, use as-is)
+- Common price patterns: "2345" = ₱2,345.00, "150" = ₱150.00, "15.50" = ₱15.50
+- If amount has no decimal point and is 2+ digits, treat it as whole pesos
+- ONLY extract actual purchased items, NOT totals, subtotals, change, tax, VAT, discounts
+- Skip store names, addresses, dates, times, receipt numbers, cashier names
+- If you see "x2" or "x 3" or "qty: 2", that's the quantity
+- The amount should be the UNIT price, not the line total
+- If unsure about category, use "General"
+- If you cannot clearly identify items, return empty array []
+- DO NOT include items that look like: TOTAL, SUBTOTAL, CHANGE, CASH, PAYMENT, TAX, VAT, DISCOUNT
+- Return ONLY valid JSON array, no markdown code blocks, no explanations, no other text
+
+Return ONLY a JSON array (raw JSON, no code blocks, no markdown):
+[{"title": "Chicken Breast", "amount": 150, "quantity": 1, "category": "Raw Materials"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}]
+
+If no items found or image is unclear, return: []`;
 
     let items: any[] | null = null;
 
-    // Rotate through ALL Google AI models to spread RPD usage
+    // Rotate through ALL Google AI Vision models
     const startIndex = googleModelIndex;
     for (let i = 0; i < GOOGLE_AI_MODELS.length; i++) {
       const idx = (startIndex + i) % GOOGLE_AI_MODELS.length;
       const model = GOOGLE_AI_MODELS[idx];
+
+      // Get current API key and rotate
+      const currentApiKey = GEMINI_API_KEYS[geminiApiKeyIndex];
+      const keyNumber = geminiApiKeyIndex + 1;
+      geminiApiKeyIndex = (geminiApiKeyIndex + 1) % GEMINI_API_KEYS.length;
+
       try {
         console.log(
-          `🔄 Trying Google AI: ${model} (slot ${idx + 1}/${GOOGLE_AI_MODELS.length})...`,
+          `🔄 Trying Gemini Vision: ${model} (model ${idx + 1}/${GOOGLE_AI_MODELS.length}, key #${keyNumber})...`,
         );
-        items = await tryGeminiAPI(text, model, receiptType, signal);
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentApiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: visionPrompt },
+                    {
+                      inline_data: {
+                        mime_type: "image/jpeg",
+                        data: base64Image,
+                      },
+                    },
+                  ],
+                },
+              ],
+              generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+            }),
+            signal: signal,
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(`${model} error: ${response.status}`);
+        }
+
+        const result = await response.json();
+        const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        items = extractItemsFromAIResponse(aiText);
+
         if (items && items.length > 0) {
-          console.log(`✅ ${model} parsed ${items.length} items`);
+          console.log(`✅ ${model} parsed ${items.length} items from image`);
           // Advance rotation to NEXT model for the next scan
           googleModelIndex = (idx + 1) % GOOGLE_AI_MODELS.length;
           break;
@@ -818,7 +604,8 @@ If no items found or text is unclear, return: []`;
         console.warn(`❌ ${model} failed:`, e);
       }
     }
-    // Advance rotation even if all failed, so next scan starts fresh
+
+    // Advance rotation even if all failed
     if (!items || items.length === 0) {
       googleModelIndex = (startIndex + 1) % GOOGLE_AI_MODELS.length;
     }
@@ -835,98 +622,11 @@ If no items found or text is unclear, return: []`;
       }));
 
       setExpenses(newExpenses);
-
-      // Show success animation (user will click View Items button)
       setScanComplete(true);
     } else {
-      // All AI failed, show error animation (user will click Retake Photo button)
-      console.log("All AI parsers failed, showing error animation...");
+      console.log("All Gemini Vision models failed, showing error...");
       setScanError(true);
     }
-  };
-
-  // Fallback regex-based parsing (used when AI fails)
-
-  // Fallback OCR with realistic receipt patterns (used when API fails)
-  const simulateAdvancedOCR = async (): Promise<string> => {
-    // Simulate processing delay
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    // Generate realistic receipt text based on common Filipino receipt formats
-    const receipts = [
-      `MINI STOP
-DATE: ${getCurrentDate()}
-CHICKEN JOY - ₱89.00
-RICE - ₱25.00 x 2
-COKE 1.5L - ₱45.00
-BREAD - ₱35.00 x 1
-TOTAL: ₱219.00
-CASH: ₱250.00
-CHANGE: ₱31.00
-THANK YOU!`,
-
-      `7-ELEVEN
-${getCurrentDate()}
-INSTANT NOODLES ₱15.00 x 3
-MILK TEA ₱65.00
-COFFEE ₱35.00 x 2
-CHOCOLATE ₱25.00
-TOTAL AMOUNT: ₱190.00
-TENDERED: ₱200.00
-CHANGE: ₱10.00`,
-
-      `GROCERY RECEIPT
-SUPER 8
-DATE: ${getCurrentDate()}
-VEGETABLES - ₱120.00
-MEAT - ₱350.00 x 1
-FISH - ₱180.00
-COOKING OIL - ₱85.00 x 2
-SUGAR - ₱55.00
-SALT - ₱12.00
-TOTAL: ₱887.00`,
-
-      `OFFICE SUPPLIES
-NATIONAL BOOKSTORE
-${getCurrentDate()}
-BOND PAPER A4 - ₱150.00
-BALLPEN - ₱8.00 x 5
-STAPLER - ₱75.00
-FOLDER - ₱12.00 x 10
-HIGHLIGHTER - ₱25.00 x 3
-TOTAL: ₱430.00`,
-
-      `GAS STATION
-PETRON
-${getCurrentDate()}
-GASOLINE - ₱58.50 x 10L
-MOTOR OIL - ₱250.00
-CAR WASH - ₱150.00
-TOTAL: ₱985.00`,
-
-      `HARDWARE STORE
-ACE HARDWARE
-${getCurrentDate()}
-SCREWS - ₱25.00 x 2
-HAMMER - ₱180.00
-PAINT - ₱350.00 x 1
-BRUSH - ₱45.00 x 3
-NAILS - ₱15.00 x 4
-TOTAL: ₱750.00`,
-
-      `PHARMACY
-MERCURY DRUG
-${getCurrentDate()}
-PARACETAMOL - ₱35.00 x 2
-VITAMINS - ₱180.00
-FIRST AID KIT - ₱250.00
-BAND AID - ₱25.00 x 3
-ALCOHOL - ₱45.00 x 2
-TOTAL: ₱615.00`,
-    ];
-
-    // Return a random receipt for simulation
-    return receipts[Math.floor(Math.random() * receipts.length)];
   };
 
   // Fallback regex-based parsing (used when Gemini AI fails)
@@ -941,92 +641,141 @@ TOTAL: ₱615.00`,
 
     // Enhanced categorization keywords
     const categoryKeywords: Record<string, string[]> = {
-      Food: [
-        "chicken",
-        "rice",
+      "Raw Materials": [
+        "raw",
+        "material",
+        "ingredient",
+        "flour",
+        "sugar",
+        "salt",
+        "oil",
+        "meat",
+        "fish",
+        "vegetable",
+        "fruit",
+        "grain",
+        "spice",
+        "seasoning",
+        "fresh",
+        "produce",
+        "poultry",
         "beef",
         "pork",
-        "fish",
-        "bread",
-        "milk",
-        "eggs",
-        "vegetables",
-        "fruits",
-        "pizza",
-        "burger",
-        "sandwich",
-        "coffee",
-        "tea",
-        "juice",
-        "soda",
-        "water",
-        "snacks",
-        "chips",
-        "cookies",
-        "cake",
-        "noodles",
-        "restaurant",
-        "food",
-        "grocery",
-        "supermarket",
-        "meat",
-        "jollibee",
-        "mcdonalds",
-        "mcdonald",
-        "kfc",
-        "ministop",
-        "7-eleven",
-        "7eleven",
-        "coke",
-        "pepsi",
-        "sprite",
-        "fries",
-        "meal",
-        "combo",
-        "ice cream",
-        "chocolate",
-        "candy",
-        "biscuit",
-        "crackers",
-        "hotdog",
-        "sausage",
+        "chicken",
+        "seafood",
+        "dairy",
         "egg",
-        "ulam",
-        "viand",
-        "ulam",
-        "softdrinks",
-        "drink",
-        "beverage",
+        "milk",
+        "cheese",
+        "butter",
+        "rice",
+        "wheat",
+        "corn",
+        "beans",
       ],
-      Office: [
-        "paper",
-        "pen",
-        "pencil",
-        "stapler",
-        "folder",
-        "binder",
-        "office",
+      "Packaging Materials": [
+        "packaging",
+        "package",
+        "box",
+        "container",
+        "bag",
+        "plastic",
+        "wrapper",
+        "carton",
+        "bottle",
+        "can",
+        "jar",
+        "pouch",
+        "foil",
+        "cellophane",
+        "paper bag",
+        "styrofoam",
+        "cup",
+        "lid",
+        "straw",
+        "tissue",
+        "napkin",
+        "tape",
+        "label",
+        "sticker",
+        "seal",
+      ],
+      "Store Supplies": [
         "supplies",
-        "printer",
-        "ink",
-        "computer",
-        "laptop",
-        "keyboard",
-        "mouse",
-        "desk",
-        "chair",
-        "bond",
-        "ballpen",
-        "highlighter",
-        "marker",
+        "store",
+        "shop",
+        "cleaning",
+        "detergent",
+        "soap",
+        "mop",
+        "broom",
+        "brush",
+        "sponge",
+        "towel",
+        "gloves",
+        "apron",
+        "uniform",
+        "pen",
+        "paper",
         "notebook",
-        "envelope",
-        "clip",
+        "receipt",
+        "calculator",
+        "stapler",
         "scissors",
         "tape",
-        "glue",
-        "eraser",
-        "ruler",
+        "marker",
+        "office",
+        "sanitizer",
+        "disinfectant",
+        "bleach",
+      ],
+      Utilities: [
+        "electricity",
+        "water",
+        "bill",
+        "internet",
+        "phone",
+        "cable",
+        "wifi",
+        "utility",
+        "electric",
+        "pldt",
+        "smart",
+        "globe",
+        "meralco",
+        "maynilad",
+        "manila water",
+        "converge",
+        "sky",
+        "cignal",
+        "kwh",
+        "kilowatt",
+        "consumption",
+      ],
+      Equipment: [
+        "equipment",
+        "machine",
+        "device",
+        "appliance",
+        "refrigerator",
+        "oven",
+        "microwave",
+        "blender",
+        "mixer",
+        "fan",
+        "aircon",
+        "ac",
+        "freezer",
+        "stove",
+        "grill",
+        "fryer",
+        "cutter",
+        "slicer",
+        "scale",
+        "register",
+        "pos",
+        "tools",
+        "hardware",
       ],
       Transportation: [
         "gas",
@@ -1049,8 +798,6 @@ TOTAL: ₱615.00`,
         "caltex",
         "phoenix",
         "seaoil",
-        "total",
-        "jetti",
         "fare",
         "transpo",
         "vehicle",
@@ -1058,107 +805,8 @@ TOTAL: ₱615.00`,
         "oil",
         "liter",
         "litre",
-      ],
-      Utilities: [
-        "electricity",
-        "water bill",
-        "internet",
-        "phone",
-        "cable",
-        "wifi",
-        "bill",
-        "utility",
-        "electric",
-        "pldt",
-        "smart",
-        "globe",
-        "meralco",
-        "maynilad",
-        "manila water",
-        "converge",
-        "sky",
-        "cignal",
-      ],
-      Maintenance: [
-        "repair",
-        "fix",
-        "maintenance",
-        "service",
-        "cleaning",
-        "tools",
-        "hardware",
-        "paint",
-        "construction",
-        "plumbing",
-        "electrical",
-        "hammer",
-        "screws",
-        "nails",
-        "brush",
-        "cement",
-        "wood",
-        "lumber",
-        "ace hardware",
-        "handyman",
-        "wilcon",
-        "cw home",
-      ],
-      Marketing: [
-        "advertising",
-        "ads",
-        "marketing",
-        "promotion",
-        "flyers",
-        "banner",
-        "social media",
-        "facebook",
-        "google ads",
-        "website",
-        "tarpaulin",
-        "signage",
-        "poster",
-        "brochure",
-      ],
-      Medical: [
-        "medicine",
-        "doctor",
-        "hospital",
-        "clinic",
-        "pharmacy",
-        "medical",
-        "health",
-        "pills",
-        "vitamins",
-        "first aid",
-        "paracetamol",
-        "biogesic",
-        "mercury drug",
-        "watsons",
-        "southstar",
-        "generics",
-        "tablet",
-        "capsule",
-        "syrup",
-        "alcohol",
-        "bandage",
-        "band aid",
-        "mask",
-        "thermometer",
-      ],
-      Equipment: [
-        "equipment",
-        "machine",
-        "device",
-        "appliance",
-        "refrigerator",
-        "oven",
-        "microwave",
-        "blender",
-        "mixer",
-        "fan",
-        "aircon",
-        "ac",
-        "freezer",
+        "delivery",
+        "shipping",
       ],
     };
 
@@ -1487,28 +1135,19 @@ TOTAL: ₱615.00`,
     }
   };
 
-  const closeOCRView = () => {
-    setShowCamera(false);
-    setShowCameraView(false);
-    setCapturedImage(null);
-    setOcrText("");
-  };
-
   const retakePhoto = () => {
     setShowScanAnimation(false);
     setScanComplete(false);
     setScanError(false);
-    setShowCamera(false);
     setCapturedImage(null);
-    setOcrText("");
-    setShowCameraView(true);
+    // Open camera again to take a new photo
+    handleOpenCamera();
   };
 
   const viewItems = () => {
     setShowScanAnimation(false);
     setScanComplete(false);
     setScanError(false);
-    closeOCRView();
   };
 
   const cancelScan = () => {
@@ -1523,9 +1162,7 @@ TOTAL: ₱615.00`,
     setShowScanAnimation(false);
     setScanComplete(false);
     setScanError(false);
-    setShowCamera(false);
     setCapturedImage(null);
-    setOcrText("");
   };
 
   const clearScan = () => {
@@ -1549,7 +1186,6 @@ TOTAL: ₱615.00`,
               },
             ]);
             setCapturedImage(null);
-            setOcrText("");
           },
         },
       ],
@@ -1705,10 +1341,7 @@ TOTAL: ₱615.00`,
           </TouchableOpacity>
 
           {/* Clear Scan Button */}
-          {(capturedImage ||
-            ocrText ||
-            expenses.length > 1 ||
-            expenses[0].title) && (
+          {(capturedImage || expenses.length > 1 || expenses[0].title) && (
             <TouchableOpacity style={styles.clearButton} onPress={clearScan}>
               <Trash2 color={COLORS.textDark} size={20} />
               <Text style={styles.clearButtonText}>Clear Scan</Text>
@@ -1719,71 +1352,6 @@ TOTAL: ₱615.00`,
           <View style={{ height: 100 }} />
         </ScrollView>
       </View>
-
-      {/* Native Camera View Modal */}
-      <Modal
-        visible={showCameraView}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={() => setShowCameraView(false)}
-      >
-        <View style={styles.container}>
-          <CameraView
-            ref={cameraRef}
-            style={styles.cameraView}
-            facing="back"
-            flash={flashMode}
-          >
-            {/* Camera Overlay with Frame Guide */}
-            <View style={styles.cameraOverlay}>
-              {/* Header */}
-              <View style={styles.cameraHeader}>
-                <TouchableOpacity
-                  onPress={() => setShowCameraView(false)}
-                  style={styles.closeButton}
-                >
-                  <X color={COLORS.white} size={24} />
-                </TouchableOpacity>
-                <Text style={styles.cameraTitle}>Scan Receipt</Text>
-                <TouchableOpacity
-                  onPress={toggleFlash}
-                  style={styles.closeButton}
-                >
-                  {flashMode === "on" ? (
-                    <Zap color={COLORS.white} size={24} fill={COLORS.white} />
-                  ) : (
-                    <ZapOff color={COLORS.white} size={24} />
-                  )}
-                </TouchableOpacity>
-              </View>
-
-              {/* Frame Guide */}
-              <View style={styles.cameraFrameContainer}>
-                <Text style={styles.cameraInstructionText}>
-                  Position receipt within frame
-                </Text>
-                <View style={styles.cameraFrame}>
-                  {/* Corner guides */}
-                  <View style={styles.frameCornerTL} />
-                  <View style={styles.frameCornerTR} />
-                  <View style={styles.frameCornerBL} />
-                  <View style={styles.frameCornerBR} />
-                </View>
-              </View>
-
-              {/* Capture Button */}
-              <View style={styles.cameraControls}>
-                <TouchableOpacity
-                  style={styles.captureButton}
-                  onPress={takePicture}
-                >
-                  <View style={styles.captureButtonInner} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </CameraView>
-        </View>
-      </Modal>
 
       {/* Category Picker Modal */}
       <Modal
@@ -1850,96 +1418,6 @@ TOTAL: ₱615.00`,
         </View>
       </Modal>
 
-      {/* OCR Camera Modal */}
-      <Modal
-        visible={showCamera}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={closeOCRView}
-      >
-        <View style={styles.modalContainer}>
-          <StatusBar
-            barStyle="light-content"
-            backgroundColor={COLORS.primaryBlue}
-          />
-
-          {/* Modal Header */}
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={closeOCRView} style={styles.closeButton}>
-              <X color={COLORS.white} size={24} />
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>Receipt Scanner</Text>
-            <View style={styles.closeButton} />
-          </View>
-
-          {/* Image Preview with Square Guide */}
-          {capturedImage && (
-            <View style={styles.imagePreviewContainer}>
-              <Image
-                source={{ uri: capturedImage }}
-                style={styles.previewImage}
-                resizeMode="contain"
-              />
-              {/* Square Guide Overlay */}
-              <View style={styles.scanGuideOverlay}>
-                <View style={styles.scanGuideCornerTL} />
-                <View style={styles.scanGuideCornerTR} />
-                <View style={styles.scanGuideCornerBL} />
-                <View style={styles.scanGuideCornerBR} />
-              </View>
-              <Text style={styles.scanGuideText}>
-                Cropped area will be processed
-              </Text>
-            </View>
-          )}
-
-          {/* OCR Text Display */}
-          <View style={styles.ocrContainer}>
-            <Text style={styles.ocrLabel}>Extracted Text:</Text>
-
-            {isProcessing ? (
-              <View style={styles.processingContainer}>
-                <ActivityIndicator size="large" color={COLORS.primaryBlue} />
-                <Text style={styles.processingText}>Processing receipt...</Text>
-              </View>
-            ) : (
-              <ScrollView style={styles.ocrScrollView}>
-                <Text style={styles.ocrText}>
-                  {ocrText || "No text extracted yet"}
-                </Text>
-              </ScrollView>
-            )}
-          </View>
-
-          {/* Action Buttons */}
-          <View style={styles.modalActions}>
-            <TouchableOpacity
-              style={styles.retakeButton}
-              onPress={handleOpenCamera}
-              disabled={isProcessing}
-            >
-              <Camera color={COLORS.primaryBlue} size={20} />
-              <Text style={styles.retakeButtonText}>Retake</Text>
-            </TouchableOpacity>
-            {capturedImage && !isProcessing && (
-              <TouchableOpacity
-                style={styles.reprocessButton}
-                onPress={() => processImageWithOCR(capturedImage)}
-              >
-                <Text style={styles.reprocessButtonText}>Re-process</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.acceptButton}
-              onPress={closeOCRView}
-              disabled={isProcessing}
-            >
-              <Text style={styles.acceptButtonText}>Accept</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
       {/* Scanning Animation Modal */}
       <Modal
         visible={showScanAnimation}
@@ -1978,6 +1456,9 @@ TOTAL: ₱615.00`,
               <Text style={styles.animationSubText}>
                 Items detected successfully.{"\n"}Review and adjust as needed.
               </Text>
+            )}
+            {!scanError && !scanComplete && isProcessing && (
+              <Text style={styles.animationSubText}>{processingMessage}</Text>
             )}
 
             {/* Show cancel button while processing */}
@@ -2341,11 +1822,6 @@ const styles = StyleSheet.create({
   ocrScrollView: {
     flex: 1,
   },
-  ocrText: {
-    fontSize: 14,
-    color: COLORS.textDark,
-    lineHeight: 22,
-  },
   processingContainer: {
     flex: 1,
     justifyContent: "center",
@@ -2408,109 +1884,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  // Camera View Styles
-  cameraView: {
-    flex: 1,
-  },
-  cameraOverlay: {
-    flex: 1,
-    backgroundColor: "transparent",
-  },
-  cameraHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingTop: 50,
-    paddingBottom: 15,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-  },
-  cameraTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: COLORS.white,
-  },
-  cameraFrameContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  cameraInstructionText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: COLORS.white,
-    marginBottom: 30,
-    backgroundColor: "rgba(0, 0, 0, 0.6)",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  cameraFrame: {
-    width: 300,
-    height: 400,
-    position: "relative",
-  },
-  frameCornerTL: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: 40,
-    height: 40,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-    borderColor: COLORS.white,
-  },
-  frameCornerTR: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    width: 40,
-    height: 40,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-    borderColor: COLORS.white,
-  },
-  frameCornerBL: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    width: 40,
-    height: 40,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-    borderColor: COLORS.white,
-  },
-  frameCornerBR: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 40,
-    height: 40,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-    borderColor: COLORS.white,
-  },
-  cameraControls: {
-    paddingVertical: 40,
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-  },
-  captureButton: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: COLORS.white,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 4,
-    borderColor: COLORS.primaryBlue,
-  },
-  captureButtonInner: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: COLORS.primaryBlue,
-  },
   animationModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.8)",
