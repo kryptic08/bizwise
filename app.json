@@ -2,7 +2,7 @@
   "expo": {
     "name": "BizWise",
     "slug": "bizwise-expense-manager",
-    "version": "1.2.0",
+    "version": "1.4.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "bizwise",
@@ -13,9 +13,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#3b6ea5"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bizwise.expensemanager"
@@ -74,9 +72,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "ae17c511-32ab-43b3-a9c1-0e5e9e1615d8"
+        "projectId": "0d1772b9-4865-47cd-8832-81296905f5a8"
       }
     },
-    "owner": "devaxsc"
+    "owner": "chrlie"
   }
 }
