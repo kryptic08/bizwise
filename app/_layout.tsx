@@ -22,11 +22,10 @@ const CustomLightTheme = {
 };
 
 function RootLayoutNav() {
-  const [showWelcome, setShowWelcome] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const { user, isLoading, isPinLocked } = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  const isMounted = useRef(false);
   const routerRef = useRef(router);
   const isNavigating = useRef(false);
 
@@ -35,11 +34,10 @@ function RootLayoutNav() {
   }, [router]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowWelcome(false);
-    }, 100);
-    return () => clearTimeout(timer);
-  }, []);
+    if (!isLoading) {
+      setInitialized(true);
+    }
+  }, [isLoading]);
 
   useEffect(() => {
     if (user && !isPinLocked && !isLoading) {
@@ -48,12 +46,7 @@ function RootLayoutNav() {
   }, [user, isPinLocked, isLoading]);
 
   useEffect(() => {
-    if (!isMounted.current) {
-      isMounted.current = true;
-      return;
-    }
-
-    if (isLoading || showWelcome || isNavigating.current) {
+    if (!initialized || isNavigating.current) {
       return;
     }
 
@@ -88,9 +81,9 @@ function RootLayoutNav() {
     setTimeout(() => {
       isNavigating.current = false;
     }, 100);
-  }, [user, isLoading, isPinLocked, segments, showWelcome]);
+  }, [user, isLoading, isPinLocked, segments, initialized]);
 
-  if (showWelcome || isLoading) {
+  if (!initialized || isLoading) {
     return null;
   }
 
