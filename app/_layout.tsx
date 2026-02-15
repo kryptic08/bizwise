@@ -1,7 +1,7 @@
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -22,22 +22,10 @@ const CustomLightTheme = {
 };
 
 function RootLayoutNav() {
-  const [initialized, setInitialized] = useState(false);
   const { user, isLoading, isPinLocked } = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  const routerRef = useRef(router);
   const isNavigating = useRef(false);
-
-  useEffect(() => {
-    routerRef.current = router;
-  }, [router]);
-
-  useEffect(() => {
-    if (!isLoading) {
-      setInitialized(true);
-    }
-  }, [isLoading]);
 
   useEffect(() => {
     if (user && !isPinLocked && !isLoading) {
@@ -46,83 +34,64 @@ function RootLayoutNav() {
   }, [user, isPinLocked, isLoading]);
 
   useEffect(() => {
-    if (!initialized || isNavigating.current) {
-      return;
+    if (isLoading || isNavigating.current) return;
+
+    const screen = segments[0] as string;
+    const isPinScreen = screen === "pin-entry" || screen === "pin-setup";
+
+    if (isPinScreen) return;
+
+    if (!user) {
+      if (screen !== "welcome" && screen !== "login" && screen !== "onboarding" && screen !== "reset") {
+        isNavigating.current = true;
+        router.replace("/welcome");
+      }
+    } else if (isPinLocked) {
+      if (screen !== "pin-entry") {
+        isNavigating.current = true;
+        router.replace("/pin-entry");
+      }
+    } else if (!user.pin) {
+      if (screen !== "pin-setup") {
+        isNavigating.current = true;
+        router.replace("/pin-setup");
+      }
+    } else if (screen === "welcome" || screen === "login" || screen === "onboarding" || screen === "reset") {
+      isNavigating.current = true;
+      router.replace("/(tabs)");
     }
 
-    const currentScreen = segments[0];
-    const isOnPinScreen =
-      currentScreen === "pin-entry" || currentScreen === "pin-setup";
+    setTimeout(() => { isNavigating.current = false; }, 100);
+  }, [user, isLoading, isPinLocked, segments]);
 
-    if (isOnPinScreen) {
-      return;
-    }
-
-    const inAuthGroup = currentScreen === "(tabs)";
-    const onAuthScreen =
-      currentScreen === "welcome" ||
-      currentScreen === "onboarding" ||
-      currentScreen === "login" ||
-      currentScreen === "reset";
-
-    if (!user && inAuthGroup) {
-      isNavigating.current = true;
-      routerRef.current.replace("/welcome");
-    } else if (user && isPinLocked) {
-      isNavigating.current = true;
-      routerRef.current.replace("/pin-entry");
-    } else if (user && !user.pin) {
-      isNavigating.current = true;
-      routerRef.current.replace("/pin-setup");
-    } else if (user && !isPinLocked && onAuthScreen) {
-      isNavigating.current = true;
-      routerRef.current.replace("/(tabs)");
-    }
-
-    setTimeout(() => {
-      isNavigating.current = false;
-    }, 100);
-  }, [user, isLoading, isPinLocked, segments, initialized]);
-
-  if (!initialized || isLoading) {
-    return null;
-  }
+  if (isLoading) return null;
 
   return (
     <ThemeProvider value={CustomLightTheme}>
-      <Stack>
-        <Stack.Screen name="welcome" options={{ headerShown: false }} />
-        <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        <Stack.Screen name="login" options={{ headerShown: false }} />
-        <Stack.Screen name="reset" options={{ headerShown: false }} />
-        <Stack.Screen name="pin-setup" options={{ headerShown: false }} />
-        <Stack.Screen name="pin-entry" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="checkout" options={{ headerShown: false }} />
-        <Stack.Screen name="add-item" options={{ headerShown: false }} />
-        <Stack.Screen name="edit-item" options={{ headerShown: false }} />
-        <Stack.Screen name="edit-profile" options={{ headerShown: false }} />
-        <Stack.Screen name="security" options={{ headerShown: false }} />
-        <Stack.Screen name="settings" options={{ headerShown: false }} />
-        <Stack.Screen name="help" options={{ headerShown: false }} />
-        <Stack.Screen name="contact-us" options={{ headerShown: false }} />
-        <Stack.Screen name="change-password" options={{ headerShown: false }} />
-        <Stack.Screen name="change-pin" options={{ headerShown: false }} />
-        <Stack.Screen name="delete-account" options={{ headerShown: false }} />
-        <Stack.Screen name="terms" options={{ headerShown: false }} />
-        <Stack.Screen name="target-income" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="notification-settings"
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="manage-categories"
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="modal"
-          options={{ presentation: "modal", title: "Modal" }}
-        />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="welcome" />
+        <Stack.Screen name="onboarding" />
+        <Stack.Screen name="login" />
+        <Stack.Screen name="reset" />
+        <Stack.Screen name="pin-setup" />
+        <Stack.Screen name="pin-entry" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="checkout" />
+        <Stack.Screen name="add-item" />
+        <Stack.Screen name="edit-item" />
+        <Stack.Screen name="edit-profile" />
+        <Stack.Screen name="security" />
+        <Stack.Screen name="settings" />
+        <Stack.Screen name="help" />
+        <Stack.Screen name="contact-us" />
+        <Stack.Screen name="change-password" />
+        <Stack.Screen name="change-pin" />
+        <Stack.Screen name="delete-account" />
+        <Stack.Screen name="terms" />
+        <Stack.Screen name="target-income" />
+        <Stack.Screen name="notification-settings" />
+        <Stack.Screen name="manage-categories" />
+        <Stack.Screen name="modal" options={{ presentation: "modal" }} />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>
