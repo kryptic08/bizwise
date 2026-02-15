@@ -48,19 +48,11 @@ function RootLayoutNav() {
         isNavigating.current = true;
         router.replace("/welcome");
       }
-    } else if (isPinLocked) {
-      if (screen !== "pin-entry" && screen !== "welcome") {
-        isNavigating.current = true;
-        router.replace("/pin-entry");
-      }
-    } else if (!user.pin) {
-      if (screen !== "pin-setup") {
-        isNavigating.current = true;
-        router.replace("/pin-setup");
-      }
     } else if (screen === "welcome" || screen === "login" || screen === "onboarding" || screen === "reset") {
-      isNavigating.current = true;
-      router.replace("/(tabs)");
+      if (user && !isPinLocked && user.pin) {
+        isNavigating.current = true;
+        router.replace("/(tabs)");
+      }
     }
 
     setTimeout(() => { isNavigating.current = false; }, 100);
