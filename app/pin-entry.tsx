@@ -1,6 +1,5 @@
-import { useMutation } from "convex/react";
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   StatusBar,
@@ -11,7 +10,6 @@ import {
   View,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
-import { api } from "../convex/_generated/api";
 import { useAuth } from "./context/AuthContext";
 
 const COLORS = {
@@ -23,57 +21,129 @@ const COLORS = {
   error: "#ef4444",
 };
 
+const PinDots = React.memo(({ length, error, verifying }: { length: number; error: boolean; verifying: boolean }) => (
+  <View style={styles.pinDotsContainer}>
+    {[0, 1, 2, 3].map((index) => (
+      <View
+        key={index}
+        style={[
+          styles.pinDot,
+          length > index && styles.pinDotFilled,
+          error && styles.pinDotError,
+          verifying && styles.pinDotVerifying,
+        ]}
+      />
+    ))}
+  </View>
+));
+
+const NumberPad = React.memo(({ onNumberPress, onDelete, disabled }: { 
+  onNumberPress: (num: string) => void; 
+  onDelete: () => void;
+  disabled: boolean;
+}) => {
+  const numbers = [
+    ["1", "2", "3"],
+    ["4", "5", "6"],
+    ["7", "8", "9"],
+    ["", "0", "⌫"],
+  ];
+
+  return (
+    <View style={styles.numberPad}>
+      {numbers.map((row, rowIndex) => (
+        <View key={rowIndex} style={styles.numberRow}>
+          {row.map((num, colIndex) => {
+            if (num === "") {
+              return <View key={colIndex} style={styles.numberButton} />;
+            }
+            if (num === "⌫") {
+              return (
+                <TouchableOpacity
+                  key={colIndex}
+                  style={[styles.numberButton, disabled && styles.numberButtonDisabled]}
+                  onPress={onDelete}
+                  activeOpacity={0.7}
+                  disabled={disabled}
+                >
+                  <Text style={[styles.deleteText, disabled && styles.numberTextDisabled]}>{num}</Text>
+                </TouchableOpacity>
+              );
+            }
+            return (
+              <TouchableOpacity
+                key={colIndex}
+                style={[styles.numberButton, disabled && styles.numberButtonDisabled]}
+                onPress={() => onNumberPress(num)}
+                activeOpacity={0.7}
+                disabled={disabled}
+              >
+                <Text style={[styles.numberText, disabled && styles.numberTextDisabled]}>{num}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+});
+
 export default function PinEntryScreen() {
   const router = useRouter();
   const { user, unlockWithPin, logout } = useAuth();
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
-  const verifyPinMutation = useMutation(api.users.verifyPin);
+  const [isVerifying, setIsVerifying] = useState(false);
+
+  // Memoize user name to prevent re-renders
+  const userName = useMemo(() => user?.name || "User", [user?.name]);
 
   useEffect(() => {
-    // If no user or no PIN set, redirect to login
     if (!user || !user.pin) {
       router.replace("/login");
     }
-  }, [user]);
+  }, [user, router]);
 
-  const handleNumberPress = (num: string) => {
-    if (pin.length < 4) {
-      const newPin = pin + num;
-      setPin(newPin);
-      setError("");
-
-      // Auto-verify when 4 digits entered
-      if (newPin.length === 4) {
-        verifyPin(newPin);
-      }
-    }
-  };
-
-  const handleDelete = () => {
-    setPin(pin.slice(0, -1));
+  const handleNumberPress = useCallback((num: string) => {
+    if (isVerifying || pin.length >= 4) return;
+    
+    const newPin = pin + num;
+    setPin(newPin);
     setError("");
-  };
 
-  const verifyPin = async (pinToVerify: string) => {
+    if (newPin.length === 4) {
+      setTimeout(() => {
+        verifyPin(newPin);
+      }, 100);
+    }
+  }, [isVerifying, pin, user]);
+
+  const handleDelete = useCallback(() => {
+    setPin((prev) => prev.slice(0, -1));
+    setError("");
+  }, []);
+
+  const verifyPin = useCallback(async (pinToVerify: string) => {
+    if (isVerifying) return;
+    
+    setIsVerifying(true);
     try {
-      await verifyPinMutation({
-        userId: user!.userId,
-        pin: pinToVerify,
-      });
-
-      // Success - unlock the app
-      unlockWithPin();
-      router.replace("/(tabs)");
+      if (user?.pin === pinToVerify) {
+        unlockWithPin();
+        router.replace("/(tabs)");
+      } else {
+        throw new Error("Incorrect PIN");
+      }
     } catch (err: any) {
-      // Wrong PIN
       Vibration.vibrate(500);
       setError("Incorrect PIN");
       setPin("");
+    } finally {
+      setIsVerifying(false);
     }
-  };
+  }, [isVerifying, user, unlockWithPin, router]);
 
-  const handleForgotPin = () => {
+  const handleForgotPin = useCallback(() => {
     Alert.alert(
       "Forgot PIN?",
       "You'll need to log out and sign in again with your password.",
@@ -89,69 +159,7 @@ export default function PinEntryScreen() {
         },
       ],
     );
-  };
-
-  const renderPinDots = () => {
-    return (
-      <View style={styles.pinDotsContainer}>
-        {[0, 1, 2, 3].map((index) => (
-          <View
-            key={index}
-            style={[
-              styles.pinDot,
-              pin.length > index && styles.pinDotFilled,
-              error && styles.pinDotError,
-            ]}
-          />
-        ))}
-      </View>
-    );
-  };
-
-  const renderNumberPad = () => {
-    const numbers = [
-      ["1", "2", "3"],
-      ["4", "5", "6"],
-      ["7", "8", "9"],
-      ["", "0", "⌫"],
-    ];
-
-    return (
-      <View style={styles.numberPad}>
-        {numbers.map((row, rowIndex) => (
-          <View key={rowIndex} style={styles.numberRow}>
-            {row.map((num, colIndex) => {
-              if (num === "") {
-                return <View key={colIndex} style={styles.numberButton} />;
-              }
-              if (num === "⌫") {
-                return (
-                  <TouchableOpacity
-                    key={colIndex}
-                    style={styles.numberButton}
-                    onPress={handleDelete}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.deleteText}>{num}</Text>
-                  </TouchableOpacity>
-                );
-              }
-              return (
-                <TouchableOpacity
-                  key={colIndex}
-                  style={styles.numberButton}
-                  onPress={() => handleNumberPress(num)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.numberText}>{num}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ))}
-      </View>
-    );
-  };
+  }, [logout, router]);
 
   return (
     <View style={styles.container}>
@@ -178,14 +186,18 @@ export default function PinEntryScreen() {
       <View style={styles.content}>
         <Text style={styles.title}>Enter PIN</Text>
         <Text style={styles.subtitle}>
-          Welcome back, {user?.name || "User"}
+          Welcome back, {userName}
         </Text>
 
-        {renderPinDots()}
+        <PinDots length={pin.length} error={!!error} verifying={isVerifying} />
 
-        {error && <Text style={styles.errorText}>{error}</Text>}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        {renderNumberPad()}
+        <NumberPad 
+          onNumberPress={handleNumberPress} 
+          onDelete={handleDelete} 
+          disabled={isVerifying} 
+        />
 
         <TouchableOpacity style={styles.forgotButton} onPress={handleForgotPin}>
           <Text style={styles.forgotText}>Forgot PIN?</Text>
@@ -253,6 +265,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.error,
     backgroundColor: COLORS.error,
   },
+  pinDotVerifying: {
+    opacity: 0.6,
+  },
   errorText: {
     color: COLORS.error,
     fontSize: 14,
@@ -292,6 +307,24 @@ const styles = StyleSheet.create({
   forgotText: {
     color: COLORS.primaryBlue,
     fontSize: 16,
+    fontWeight: "600",
+  },
+  numberButtonDisabled: {
+    opacity: 0.5,
+  },
+  numberTextDisabled: {
+    opacity: 0.5,
+  },
+  offlineBanner: {
+    backgroundColor: COLORS.error,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  offlineBannerText: {
+    color: COLORS.white,
+    fontSize: 14,
     fontWeight: "600",
   },
 });

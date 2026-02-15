@@ -46,25 +46,18 @@ export const getExpensesByDateRange = query({
 
 // Generate expense transaction ID for a user
 const generateExpenseId = async (ctx: any, userId?: any): Promise<string> => {
-  const today = new Date();
-  const dateStr = today.toISOString().slice(0, 10); // YYYY-MM-DD
-
-  // Count expenses today to get next number
-  let todayExpenses;
+  // Count all expenses for the user to get unique sequential number
+  let allExpenses;
   if (userId) {
-    todayExpenses = await ctx.db
+    allExpenses = await ctx.db
       .query("expenses")
       .withIndex("by_user", (q: any) => q.eq("userId", userId))
       .collect();
-    todayExpenses = todayExpenses.filter((e: any) => e.date === dateStr);
   } else {
-    todayExpenses = await ctx.db
-      .query("expenses")
-      .withIndex("by_date", (q: any) => q.eq("date", dateStr))
-      .collect();
+    allExpenses = await ctx.db.query("expenses").collect();
   }
 
-  const nextNumber = todayExpenses.length + 1;
+  const nextNumber = allExpenses.length + 1;
   return `EXP-${nextNumber.toString().padStart(3, "0")}`;
 };
 

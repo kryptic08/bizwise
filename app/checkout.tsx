@@ -1,4 +1,3 @@
-import { useMutation } from "convex/react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, HelpCircle, Minus, Plus } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
@@ -14,8 +13,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { api } from "../convex/_generated/api";
+import { SyncBadge } from "./components/SyncBadge";
 import { useAuth } from "./context/AuthContext";
+import { useMutationQueue } from "./providers/MutationQueueProvider";
+import { useOffline } from "./providers/OfflineProvider";
 import { checkFirstSale } from "./utils/notificationInit";
 
 const { width } = Dimensions.get("window");
@@ -35,12 +36,12 @@ export default function CheckoutScreen() {
   const router = useRouter();
   const { cartData } = useLocalSearchParams();
   const { user } = useAuth();
+  const { isOnline } = useOffline();
+  const { addMutation, pendingCount } = useMutationQueue();
   const [cartItems, setCartItems] = useState<any[]>([]);
   const [amountReceived, setAmountReceived] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-
-  // Convex mutation for creating sales
-  const createSale = useMutation(api.sales.createSale);
+  const [pendingTempId, setPendingTempId] = useState<string | null>(null);
 
   useEffect(() => {
     if (cartData) {
@@ -95,7 +96,7 @@ export default function CheckoutScreen() {
     setIsProcessing(true);
 
     try {
-      // Prepare items for Convex (need to use _id instead of id)
+      // Prepare items for the sale
       const saleItems = cartItems.map((item) => ({
         productId: item._id,
         productName: item.name,
@@ -104,31 +105,51 @@ export default function CheckoutScreen() {
         quantity: item.qty,
       }));
 
-      // Save sale to Convex database
-      const result = await createSale({
+      // Add to mutation queue (works offline)
+      const tempId = await addMutation("sale", {
         items: saleItems,
         paymentReceived: received,
-        userId: user?.userId,
-        clientTimestamp: Date.now(), // Pass device timestamp
+        userId: user?.userId || "",
+        clientTimestamp: Date.now(),
       });
+
+      setPendingTempId(tempId);
 
       // Check if this is the first sale and send celebration
       checkFirstSale(true).catch(console.error);
 
-      Alert.alert(
-        "Transaction Complete",
-        `Transaction ID: ${result.transactionId}\nTotal: ₱${total.toFixed(2)}\nReceived: ₱${received.toFixed(2)}\nChange: ₱${getChange().toFixed(2)}`,
-        [
-          {
-            text: "New Transaction",
-            onPress: () => router.replace("/(tabs)/counter"),
-          },
-          {
-            text: "View Receipt",
-            onPress: () => router.push("/(tabs)/transactions"),
-          },
-        ],
-      );
+      // Show appropriate message based on online status
+      if (isOnline) {
+        Alert.alert(
+          "Transaction Complete",
+          `Transaction ID: ${tempId}\nTotal: ₱${total.toFixed(2)}\nReceived: ₱${received.toFixed(2)}\nChange: ₱${getChange().toFixed(2)}`,
+          [
+            {
+              text: "New Transaction",
+              onPress: () => router.replace("/(tabs)/counter"),
+            },
+            {
+              text: "View Receipt",
+              onPress: () => router.push("/(tabs)/transactions"),
+            },
+          ],
+        );
+      } else {
+        Alert.alert(
+          "Transaction Saved Offline",
+          `Transaction ID: ${tempId}\nTotal: ₱${total.toFixed(2)}\nReceived: ₱${received.toFixed(2)}\nChange: ₱${getChange().toFixed(2)}\n\nThis transaction will sync when you're back online.`,
+          [
+            {
+              text: "New Transaction",
+              onPress: () => router.replace("/(tabs)/counter"),
+            },
+            {
+              text: "View Receipt",
+              onPress: () => router.push("/(tabs)/transactions"),
+            },
+          ],
+        );
+      }
     } catch (error) {
       console.error("Error saving transaction:", error);
       Alert.alert("Error", "Failed to save transaction. Please try again.", [
@@ -189,12 +210,15 @@ export default function CheckoutScreen() {
         >
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Checkout</Text>
-        <TouchableOpacity style={styles.headerButton}>
-          <View style={styles.helpIconBg}>
-            <HelpCircle color={COLORS.primaryBlue} size={18} />
-          </View>
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Sales Summary</Text>
+        <View style={styles.headerRight}>
+          <SyncBadge compact />
+          <TouchableOpacity style={styles.headerButton}>
+            <View style={styles.helpIconBg}>
+              <HelpCircle color={COLORS.primaryBlue} size={18} />
+            </View>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main Content */}
@@ -237,7 +261,7 @@ export default function CheckoutScreen() {
           >
             {/* Order Summary Header */}
             <View style={styles.summaryHeader}>
-              <Text style={styles.summaryTitle}>Order Summary</Text>
+              <Text style={styles.summaryTitle}>Sales Summary</Text>
               <Text style={styles.summarySubtitle}>
                 {getTotalItems()} items
               </Text>
@@ -323,6 +347,11 @@ const styles = StyleSheet.create({
   },
   headerButton: {
     padding: 5,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   helpIconBg: {
     backgroundColor: COLORS.white,

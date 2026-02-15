@@ -1,6 +1,5 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
   ArrowDownRight,
@@ -33,8 +32,17 @@ import Svg, {
   Polygon,
   Stop,
 } from "react-native-svg";
-import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
+import { OfflineIndicator } from "../components/OfflineIndicator";
+import {
+  useDailyAnalytics,
+  useFinancialSummary,
+  useMonthlyAnalytics,
+  useTargetProgress,
+  useTopCategory,
+  useTopProduct,
+  useWeeklyAnalytics,
+} from "../hooks/useOfflineQueries";
 import { checkTargetProgress } from "../utils/notificationChecker";
 import { NotificationSettings } from "../utils/notificationService";
 
@@ -88,35 +96,14 @@ export default function HomeScreen() {
     return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
   };
 
-  // Fetch financial data from Convex
-  const financialSummary = useQuery(
-    api.analytics.getFinancialSummary,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  const dailyAnalytics = useQuery(
-    api.analytics.getDailyAnalytics,
-    user?.userId ? { days: 7, userId: user.userId } : "skip",
-  );
-  const weeklyAnalytics = useQuery(
-    api.analytics.getWeeklyAnalytics,
-    user?.userId ? { weeks: 7, userId: user.userId } : "skip",
-  );
-  const monthlyAnalytics = useQuery(
-    api.analytics.getMonthlyAnalytics,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  const topProduct = useQuery(
-    api.analytics.getTopSellingProduct,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  const topCategory = useQuery(
-    api.analytics.getTopSellingCategory,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  const targetProgress = useQuery(
-    api.analytics.getTargetProgress,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
+  // Fetch financial data with offline caching
+  const { data: financialSummary } = useFinancialSummary(user?.userId);
+  const { data: dailyAnalytics } = useDailyAnalytics(user?.userId, 7);
+  const { data: weeklyAnalytics } = useWeeklyAnalytics(user?.userId, 7);
+  const { data: monthlyAnalytics } = useMonthlyAnalytics(user?.userId);
+  const { data: topProduct } = useTopProduct(user?.userId);
+  const { data: topCategory } = useTopCategory(user?.userId);
+  const { data: targetProgress } = useTargetProgress(user?.userId);
 
   // Check target progress and trigger notifications
   useEffect(() => {
@@ -147,13 +134,25 @@ export default function HomeScreen() {
     checkNotifications();
   }, [targetProgress, user?.userId]);
 
+  // Helper function to get the number of weeks in current month
+  const getWeeksInCurrentMonth = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const firstWeekDay = firstDay.getDay();
+    const totalDays = lastDay.getDate();
+    return Math.ceil((firstWeekDay + totalDays) / 7);
+  };
+
   // Format the analytics based on active tab
   const chartData = useMemo(() => {
     let rawData: Array<{ day: string; income: number; expense: number }> = [];
 
     if (activeTab === "Daily") {
       if (!dailyAnalytics) return INCOME_EXPENSE_DATA;
-      rawData = dailyAnalytics.slice(-7).map((day) => ({
+      rawData = dailyAnalytics.slice(-7).map((day: { date: string; income: number; expense: number }) => ({
         day: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
           new Date(day.date).getDay()
         ],
@@ -162,7 +161,8 @@ export default function HomeScreen() {
       }));
     } else if (activeTab === "Weekly") {
       if (!weeklyAnalytics) return INCOME_EXPENSE_DATA;
-      rawData = weeklyAnalytics.slice(-7).map((week, index) => ({
+      const weeksInMonth = getWeeksInCurrentMonth();
+      rawData = weeklyAnalytics.slice(-weeksInMonth).map((week: { income: number; expense: number }, index: number) => ({
         day: `W${index + 1}`,
         income: week.income,
         expense: week.expense,
@@ -170,7 +170,7 @@ export default function HomeScreen() {
     } else {
       // Monthly - show all 12 months
       if (!monthlyAnalytics) return INCOME_EXPENSE_DATA.slice(0, 6);
-      rawData = monthlyAnalytics.map((month) => ({
+      rawData = monthlyAnalytics.map((month: { month: string; income: number; expense: number }) => ({
         day: month.month.substring(0, 3),
         income: month.income,
         expense: month.expense,
@@ -220,16 +220,17 @@ export default function HomeScreen() {
 
     if (activeTab === "Daily") {
       if (!dailyAnalytics) return PROFIT_DATA;
-      profits = dailyAnalytics.slice(-7).map((day) => day.income - day.expense);
+      profits = dailyAnalytics.slice(-7).map((day: { income: number; expense: number }) => day.income - day.expense);
     } else if (activeTab === "Weekly") {
       if (!weeklyAnalytics) return PROFIT_DATA;
+      const weeksInMonth = getWeeksInCurrentMonth();
       profits = weeklyAnalytics
-        .slice(-7)
-        .map((week) => week.income - week.expense);
+        .slice(-weeksInMonth)
+        .map((week: { income: number; expense: number }) => week.income - week.expense);
     } else {
       // Monthly - show all 12 months
       if (!monthlyAnalytics) return PROFIT_DATA.slice(0, 6);
-      profits = monthlyAnalytics.map((month) => month.income - month.expense);
+      profits = monthlyAnalytics.map((month: { income: number; expense: number }) => month.income - month.expense);
     }
 
     return profits;
@@ -282,16 +283,17 @@ export default function HomeScreen() {
       return dailyAnalytics
         .slice(-7)
         .map(
-          (day) =>
+          (day: { date: string }) =>
             ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
               new Date(day.date).getDay()
             ],
         );
     } else if (activeTab === "Weekly") {
-      return ["W1", "W2", "W3", "W4", "W5", "W6", "W7"];
+      const weeksInMonth = getWeeksInCurrentMonth();
+      return Array.from({ length: weeksInMonth }, (_, i) => `W${i + 1}`);
     } else {
       return monthlyAnalytics
-        ? monthlyAnalytics.map((m) => m.month.substring(0, 3))
+        ? monthlyAnalytics.map((m: { month: string }) => m.month.substring(0, 3))
         : ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
     }
   }, [activeTab, dailyAnalytics, monthlyAnalytics]);
@@ -324,23 +326,53 @@ export default function HomeScreen() {
         return ""; // No meaningful data
       }
 
-      const growthRate =
-        firstAvg !== 0
-          ? ((secondAvg - firstAvg) / Math.abs(firstAvg)) * 100
-          : secondAvg > 0
-            ? 100
-            : 0;
+      // Calculate absolute change
+      const absoluteChange = secondAvg - firstAvg;
 
-      if (growthRate > 15) {
-        return `🎉 Excellent! Profit grew by ${Math.round(growthRate)}% this period. Keep up the great work!`;
-      } else if (growthRate > 5) {
-        return `📈 Good progress! Profit increased by ${Math.round(growthRate)}% with steady growth.`;
-      } else if (growthRate > -5) {
-        return `✅ Profit is stable. Consistent performance this period!`;
-      } else if (growthRate > -15) {
-        return `⚠️ Profit decreased by ${Math.abs(Math.round(growthRate))}%. Consider reviewing expenses.`;
+      // Only show percentage if both periods have meaningful profit (>= 500)
+      const minThreshold = 500;
+      const showPercentage = Math.abs(firstAvg) >= minThreshold && Math.abs(secondAvg) >= minThreshold;
+      
+      // Calculate growth rate if meaningful
+      let growthRate: number | null = null;
+      if (showPercentage && firstAvg !== 0) {
+        growthRate = ((secondAvg - firstAvg) / Math.abs(firstAvg)) * 100;
+        // Cap at reasonable bounds
+        if (growthRate > 200) growthRate = 200;
+        if (growthRate < -200) growthRate = -200;
+      }
+
+      // Format absolute change for display
+      const changeText = absoluteChange >= 0 
+        ? `+₱${Math.abs(Math.round(absoluteChange)).toLocaleString()}`
+        : `-₱${Math.abs(Math.round(absoluteChange)).toLocaleString()}`;
+
+      // Generate insights based on absolute change and/or percentage
+      if (growthRate !== null) {
+        if (growthRate > 20) {
+          return `🎉 Excellent! Profit grew by ${Math.round(growthRate)}% (${changeText}). Keep up the great work!`;
+        } else if (growthRate > 10) {
+          return `📈 Good progress! Profit increased by ${Math.round(growthRate)}% (${changeText}) with steady growth.`;
+        } else if (growthRate > -10) {
+          return `✅ Profit is stable (${changeText}). Consistent performance this period!`;
+        } else if (growthRate > -25) {
+          return `⚠️ Profit decreased by ${Math.abs(Math.round(growthRate))}% (${changeText}). Consider reviewing expenses.`;
+        } else {
+          return `📉 Profit down by ${Math.abs(Math.round(growthRate))}% (${changeText}). Focus on boosting sales and reducing costs.`;
+        }
       } else {
-        return `📉 Profit down by ${Math.abs(Math.round(growthRate))}%. Focus on boosting sales and reducing costs.`;
+        // No meaningful percentage - use absolute values
+        if (firstAvg < 100 && secondAvg > 500) {
+          return `🎉 Great improvement! Profit went from ₱${Math.round(firstAvg)} to ₱${Math.round(secondAvg)} per period.`;
+        } else if (absoluteChange > 500) {
+          return `📈 Good progress! Profit increased by ${changeText} per period.`;
+        } else if (absoluteChange > -500 && absoluteChange < 500) {
+          return `✅ Profit is stable around ₱${Math.round(secondAvg)} per period.`;
+        } else if (absoluteChange < -500) {
+          return `⚠️ Profit dropped by ${Math.abs(Math.round(absoluteChange)).toLocaleString()} per period. Review your expenses.`;
+        } else {
+          return `📊 Current profit averages ₱${Math.round(secondAvg).toLocaleString()} per period.`;
+        }
       }
     }
 
@@ -380,7 +412,7 @@ export default function HomeScreen() {
     const profitMargin =
       totalIncome > 0 ? ((totalIncome - totalExpense) / totalIncome) * 100 : 0;
 
-    // Income trend
+    // Income trend - only calculate percentage if both periods have meaningful income
     const incomeGrowth =
       chartData.length >= 4
         ? (() => {
@@ -395,19 +427,35 @@ export default function HomeScreen() {
               firstHalf.reduce((sum, d) => sum + d.inc, 0) / firstHalf.length;
             const secondAvg =
               secondHalf.reduce((sum, d) => sum + d.inc, 0) / secondHalf.length;
-            return firstAvg > 0 ? ((secondAvg - firstAvg) / firstAvg) * 100 : 0;
+            // Only show percentage if both periods have meaningful income (>= 1000)
+            const minThreshold = 1000;
+            if (firstAvg < minThreshold || secondAvg < minThreshold) {
+              return null; // No meaningful percentage to show
+            }
+            const growth = ((secondAvg - firstAvg) / firstAvg) * 100;
+            // Cap unrealistic percentages
+            if (growth > 200) return 200;
+            if (growth < -200) return -200;
+            return growth;
           })()
-        : 0;
+        : null;
 
-    // Generate insights
-    if (profitMargin > 50) {
-      return `🌟 Excellent financial control! ${Math.round(profitMargin)}% profit margin with well-managed expenses.`;
-    } else if (profitMargin > 30) {
-      return `💰 Great balance! Income is ${incomeGrowth > 0 ? "growing" : "stable"} while expenses remain controlled.`;
-    } else if (profitMargin > 10) {
-      return `📊 Healthy finances with ${Math.round(profitMargin)}% profit margin. Room for optimization.`;
-    } else if (profitMargin > 0) {
-      return `⚠️ Tight margins at ${Math.round(profitMargin)}%. Consider reducing expenses or increasing income.`;
+    // Generate insights with realistic percentages
+    const realisticProfitMargin = Math.min(Math.max(profitMargin, -100), 100);
+    
+    // Format income trend text
+    const incomeTrendText = incomeGrowth !== null 
+      ? (incomeGrowth > 5 ? "growing" : incomeGrowth < -5 ? "declining" : "stable")
+      : "";
+    
+    if (realisticProfitMargin > 50) {
+      return `🌟 Excellent financial control! ${Math.round(realisticProfitMargin)}% profit margin with well-managed expenses.`;
+    } else if (realisticProfitMargin > 30) {
+      return `💰 Great balance!${incomeTrendText ? ` Income is ${incomeTrendText}` : ""} while expenses remain controlled.`;
+    } else if (realisticProfitMargin > 10) {
+      return `📊 Healthy finances with ${Math.round(realisticProfitMargin)}% profit margin. Room for optimization.`;
+    } else if (realisticProfitMargin > 0) {
+      return `⚠️ Tight margins at ${Math.round(realisticProfitMargin)}%. Consider reducing expenses or increasing income.`;
     } else if (totalExpense > totalIncome) {
       return `🚨 Expenses exceed income by ₱${Math.abs(totalExpense - totalIncome).toFixed(0)}. Take action to balance finances.`;
     } else {
@@ -452,6 +500,9 @@ export default function HomeScreen() {
         barStyle="light-content"
         backgroundColor={COLORS.primaryBlue}
       />
+
+      {/* Offline Indicator */}
+      <OfflineIndicator />
 
       <ScrollView
         showsVerticalScrollIndicator={false}

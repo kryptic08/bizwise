@@ -1,6 +1,6 @@
 import { useMutation } from "convex/react";
 import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   StatusBar,
@@ -22,6 +22,65 @@ const COLORS = {
   error: "#ef4444",
 };
 
+const PinDots = React.memo(({ length }: { length: number }) => (
+  <View style={styles.pinDotsContainer}>
+    {[0, 1, 2, 3].map((index) => (
+      <View
+        key={index}
+        style={[styles.pinDot, length > index && styles.pinDotFilled]}
+      />
+    ))}
+  </View>
+));
+
+const NumberPad = React.memo(({ onNumberPress, onDelete }: { 
+  onNumberPress: (num: string) => void; 
+  onDelete: () => void;
+}) => {
+  const numbers = [
+    ["1", "2", "3"],
+    ["4", "5", "6"],
+    ["7", "8", "9"],
+    ["", "0", "⌫"],
+  ];
+
+  return (
+    <View style={styles.numberPad}>
+      {numbers.map((row, rowIndex) => (
+        <View key={rowIndex} style={styles.numberRow}>
+          {row.map((num, colIndex) => {
+            if (num === "") {
+              return <View key={colIndex} style={styles.numberButton} />;
+            }
+            if (num === "⌫") {
+              return (
+                <TouchableOpacity
+                  key={colIndex}
+                  style={styles.numberButton}
+                  onPress={onDelete}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.deleteText}>{num}</Text>
+                </TouchableOpacity>
+              );
+            }
+            return (
+              <TouchableOpacity
+                key={colIndex}
+                style={styles.numberButton}
+                onPress={() => onNumberPress(num)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.numberText}>{num}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+});
+
 export default function PinSetupScreen() {
   const router = useRouter();
   const { user, login } = useAuth();
@@ -29,50 +88,59 @@ export default function PinSetupScreen() {
   const [pin, setPin] = useState("");
   const [firstPin, setFirstPin] = useState("");
   const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const setPinMutation = useMutation(api.users.setPin);
 
-  const handleNumberPress = (num: string) => {
-    if (pin.length < 4) {
-      const newPin = pin + num;
-      setPin(newPin);
-      setError("");
+  // Memoize values to prevent re-renders
+  const stepData = useMemo(() => ({
+    title: step === "enter" ? "Create PIN" : "Confirm PIN",
+    subtitle: step === "enter"
+      ? "Set up a 4-digit PIN for quick access"
+      : "Enter your PIN again to confirm"
+  }), [step]);
 
-      // Auto-proceed when 4 digits entered
-      if (newPin.length === 4) {
-        if (step === "enter") {
-          setFirstPin(newPin);
-          setPin("");
-          setStep("confirm");
+  const handleNumberPress = useCallback((num: string) => {
+    if (pin.length >= 4 || isSaving) return;
+    
+    const newPin = pin + num;
+    setPin(newPin);
+    setError("");
+
+    if (newPin.length === 4) {
+      if (step === "enter") {
+        setFirstPin(newPin);
+        setPin("");
+        setStep("confirm");
+      } else {
+        if (newPin === firstPin) {
+          savePin(newPin);
         } else {
-          // Confirm step
-          if (newPin === firstPin) {
-            savePin(newPin);
-          } else {
-            setError("PINs don't match. Try again.");
-            setPin("");
-            setFirstPin("");
-            setStep("enter");
-          }
+          setError("PINs don't match. Try again.");
+          setPin("");
+          setFirstPin("");
+          setStep("enter");
         }
       }
     }
-  };
+  }, [pin, step, firstPin, isSaving]);
 
-  const handleDelete = () => {
-    setPin(pin.slice(0, -1));
+  const handleDelete = useCallback(() => {
+    setPin((prev) => prev.slice(0, -1));
     setError("");
-  };
+  }, []);
 
-  const savePin = async (pinToSave: string) => {
+  const savePin = useCallback(async (pinToSave: string) => {
+    if (isSaving || !user) return;
+    
+    setIsSaving(true);
     try {
       await setPinMutation({
-        userId: user!.userId,
+        userId: user.userId,
         pin: pinToSave,
       });
 
-      // Update user context with PIN
       await login({
-        ...user!,
+        ...user,
         pin: pinToSave,
       });
 
@@ -84,10 +152,12 @@ export default function PinSetupScreen() {
       setPin("");
       setFirstPin("");
       setStep("enter");
+    } finally {
+      setIsSaving(false);
     }
-  };
+  }, [isSaving, user, setPinMutation, login, router]);
 
-  const handleSkip = () => {
+  const handleSkip = useCallback(() => {
     Alert.alert(
       "Skip PIN Setup?",
       "You can set up a PIN later from Security settings.",
@@ -99,65 +169,7 @@ export default function PinSetupScreen() {
         },
       ],
     );
-  };
-
-  const renderPinDots = () => {
-    return (
-      <View style={styles.pinDotsContainer}>
-        {[0, 1, 2, 3].map((index) => (
-          <View
-            key={index}
-            style={[styles.pinDot, pin.length > index && styles.pinDotFilled]}
-          />
-        ))}
-      </View>
-    );
-  };
-
-  const renderNumberPad = () => {
-    const numbers = [
-      ["1", "2", "3"],
-      ["4", "5", "6"],
-      ["7", "8", "9"],
-      ["", "0", "⌫"],
-    ];
-
-    return (
-      <View style={styles.numberPad}>
-        {numbers.map((row, rowIndex) => (
-          <View key={rowIndex} style={styles.numberRow}>
-            {row.map((num, colIndex) => {
-              if (num === "") {
-                return <View key={colIndex} style={styles.numberButton} />;
-              }
-              if (num === "⌫") {
-                return (
-                  <TouchableOpacity
-                    key={colIndex}
-                    style={styles.numberButton}
-                    onPress={handleDelete}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.deleteText}>{num}</Text>
-                  </TouchableOpacity>
-                );
-              }
-              return (
-                <TouchableOpacity
-                  key={colIndex}
-                  style={styles.numberButton}
-                  onPress={() => handleNumberPress(num)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.numberText}>{num}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ))}
-      </View>
-    );
-  };
+  }, [router]);
 
   return (
     <View style={styles.container}>
@@ -183,19 +195,20 @@ export default function PinSetupScreen() {
       {/* Content */}
       <View style={styles.content}>
         <Text style={styles.title}>
-          {step === "enter" ? "Create PIN" : "Confirm PIN"}
+          {stepData.title}
         </Text>
         <Text style={styles.subtitle}>
-          {step === "enter"
-            ? "Set up a 4-digit PIN for quick access"
-            : "Enter your PIN again to confirm"}
+          {stepData.subtitle}
         </Text>
 
-        {renderPinDots()}
+        <PinDots length={pin.length} />
 
-        {error && <Text style={styles.errorText}>{error}</Text>}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        {renderNumberPad()}
+        <NumberPad 
+          onNumberPress={handleNumberPress} 
+          onDelete={handleDelete} 
+        />
 
         <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
           <Text style={styles.skipText}>Skip for now</Text>

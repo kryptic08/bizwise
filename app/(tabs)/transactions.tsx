@@ -1,16 +1,20 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
-import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
   ChevronDown,
+  Cloud,
+  CloudOff,
   Coins,
+  Loader2,
   Utensils,
+  XCircle,
 } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
+  Animated,
   FlatList,
   StatusBar,
   StyleSheet,
@@ -18,8 +22,18 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
+import { OfflineIndicator } from "../components/OfflineIndicator";
+import { SyncBadge } from "../components/SyncBadge";
+import {
+  QueuedMutation,
+  useMutationQueue,
+} from "../providers/MutationQueueProvider";
+import { useOffline } from "../providers/OfflineProvider";
+import {
+  useFinancialSummary,
+  useTransactions,
+} from "../hooks/useOfflineQueries";
 
 // --- Colors (Consistent with Dashboard) ---
 const COLORS = {
@@ -55,28 +69,83 @@ interface Transaction {
   createdAt: number;
   sortKey: number;
   itemDetails: ItemDetail[];
+  isPending?: boolean;
+  mutationStatus?: string;
+  errorMessage?: string;
 }
 
 export default function TransactionScreen() {
   const router = useRouter();
   const { user } = useAuth();
+  const { isOnline } = useOffline();
+  const { getLocalTransactions, pendingCount, errorCount, isSyncing, retryMutation } = useMutationQueue();
 
   // Pagination state
   const [cursor, setCursor] = useState<number | undefined>(undefined);
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  // Fetch transactions from Convex with pagination
-  const paginatedData = useQuery(
-    api.analytics.getCombinedTransactionsPaginated,
-    user?.userId ? { userId: user.userId, limit: 20, cursor } : "skip",
-  );
+  // Fetch transactions with offline caching
+  const { data: paginatedData } = useTransactions(user?.userId, 20, cursor);
+  
+  // Fetch financial summary with offline caching
+  const { data: financialSummary } = useFinancialSummary(user?.userId);
 
-  // Fetch financial summary for totals
-  const financialSummary = useQuery(
-    api.analytics.getFinancialSummary,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
+  // Get local pending transactions
+  const localTransactions = useMemo(() => {
+    const pending = getLocalTransactions();
+    return pending.map((mutation: QueuedMutation) => {
+      if (mutation.type === "sale") {
+        const data = mutation.data as any;
+        const totalAmount = data.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
+        return {
+          id: mutation.id,
+          transactionId: mutation.tempId,
+          date: new Date(mutation.timestamp).toLocaleDateString(),
+          time: new Date(mutation.timestamp).toLocaleTimeString(),
+          items: `${data.items.length} item${data.items.length > 1 ? 's' : ''}`,
+          amount: `₱${totalAmount.toFixed(2)}`,
+          type: "income" as TransactionType,
+          createdAt: mutation.timestamp,
+          sortKey: mutation.timestamp,
+          itemDetails: data.items.map((item: any) => ({
+            name: item.productName,
+            category: item.category,
+            pricePerPiece: `₱${item.price.toFixed(2)}`,
+            pieces: item.quantity,
+            amount: `₱${(item.price * item.quantity).toFixed(2)}`,
+          })),
+          isPending: true,
+          mutationStatus: mutation.status,
+          errorMessage: mutation.errorMessage,
+        };
+      } else {
+        const data = mutation.data as any;
+        const totalAmount = data.items.reduce((sum: number, item: any) => sum + item.total, 0);
+        return {
+          id: mutation.id,
+          transactionId: mutation.tempId,
+          date: new Date(mutation.timestamp).toLocaleDateString(),
+          time: new Date(mutation.timestamp).toLocaleTimeString(),
+          items: `${data.items.length} item${data.items.length > 1 ? 's' : ''}`,
+          amount: `₱${totalAmount.toFixed(2)}`,
+          type: "expense" as TransactionType,
+          createdAt: mutation.timestamp,
+          sortKey: mutation.timestamp,
+          itemDetails: data.items.map((item: any) => ({
+            name: item.title,
+            category: item.category,
+            pricePerPiece: `₱${item.amount.toFixed(2)}`,
+            pieces: item.quantity,
+            amount: `₱${item.total.toFixed(2)}`,
+          })),
+          isPending: true,
+          mutationStatus: mutation.status,
+          errorMessage: mutation.errorMessage,
+        };
+      }
+    });
+  }, [getLocalTransactions]);
 
   const [filterType, setFilterType] = useState<TransactionType | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -84,28 +153,45 @@ export default function TransactionScreen() {
   // Update transactions when new data arrives
   React.useEffect(() => {
     if (paginatedData?.transactions) {
+      // When server data arrives, filter out completed local transactions
+      // (they've been synced to server)
+      const completedLocalIds = localTransactions
+        .filter((t: any) => t.mutationStatus === "completed")
+        .map((t: any) => t.id);
+      
+      // Filter out completed local transactions from the list
+      const filteredLocals = localTransactions.filter(
+        (t: any) => !completedLocalIds.includes(t.id)
+      );
+      
       if (cursor === undefined) {
-        // Initial load
-        setAllTransactions(paginatedData.transactions);
+        // Initial load - merge with local transactions
+        const merged = [...filteredLocals, ...paginatedData.transactions];
+        // Sort by timestamp (newest first)
+        merged.sort((a, b) => b.sortKey - a.sortKey);
+        setAllTransactions(merged);
       } else {
         // Append new transactions
         setAllTransactions((prev) => {
           // Avoid duplicates
-          const existingIds = new Set(prev.map((t) => t.id));
+          const existingIds = new Set(prev.map((t: Transaction) => t.id));
           const newTransactions = paginatedData.transactions.filter(
-            (t) => !existingIds.has(t.id),
+            (t: Transaction) => !existingIds.has(t.id),
           );
-          return [...prev, ...newTransactions];
+          const merged = [...prev, ...newTransactions];
+          // Sort by timestamp (newest first)
+          merged.sort((a, b) => b.sortKey - a.sortKey);
+          return merged;
         });
       }
       setIsLoadingMore(false);
     }
-  }, [paginatedData]);
+  }, [paginatedData, localTransactions]);
 
   // Debug: log transactions as they arrive
   console.log(
     "Received transactions:",
-    paginatedData?.transactions?.map((t) => ({
+    paginatedData?.transactions?.map((t: Transaction) => ({
       type: t.type,
       id: t.transactionId,
       time: t.time,
@@ -137,14 +223,32 @@ export default function TransactionScreen() {
       : allTransactions.filter((t) => t.type === filterType)
     : [];
 
-  const renderItem = ({ item }: { item: Transaction }) => {
+  const renderItem = ({ item }: { item: Transaction & { isPending?: boolean; mutationStatus?: string; errorMessage?: string } }) => {
     const isIncome = item.type === "income";
     const isExpanded = expandedId === item.id;
     const itemCount =
       parseInt(item.items) || parseInt(item.items.split(" ")[0]) || 0;
+    const isPending = item.isPending;
+
+    // Get sync status icon
+    const getSyncIcon = () => {
+      if (!isPending) return null;
+      
+      if (item.mutationStatus === "completed") {
+        return <Cloud size={14} color={COLORS.green} />;
+      } else if (item.mutationStatus === "syncing") {
+        return <Loader2 size={14} color={COLORS.primaryBlue} />;
+      } else if (item.mutationStatus === "error") {
+        return <XCircle size={14} color={COLORS.red} />;
+      } else if (!isOnline) {
+        return <CloudOff size={14} color={COLORS.textGray} />;
+      } else {
+        return <Cloud size={14} color={COLORS.textGray} />;
+      }
+    };
 
     return (
-      <View style={styles.transactionCard}>
+      <View style={[styles.transactionCard, isPending && styles.pendingCard]}>
         <TouchableOpacity
           style={styles.cardMainContent}
           onPress={() => handleTransactionPress(item.id)}
@@ -152,7 +256,7 @@ export default function TransactionScreen() {
         >
           {/* Icon Section */}
           <View style={styles.iconWrapper}>
-            <View style={styles.iconCircle}>
+            <View style={[styles.iconCircle, isPending && styles.pendingIconCircle]}>
               {isIncome ? (
                 <Utensils color={COLORS.white} size={20} />
               ) : (
@@ -166,7 +270,14 @@ export default function TransactionScreen() {
             <View style={styles.detailsLeft}>
               <View style={styles.leftTopRow}>
                 <View style={styles.leftTopLeft}>
-                  <Text style={styles.txIdText}>{item.transactionId}</Text>
+                  <View style={styles.txIdRow}>
+                    <Text style={styles.txIdText}>{item.transactionId}</Text>
+                    {isPending && (
+                      <View style={styles.syncIndicator}>
+                        {getSyncIcon()}
+                      </View>
+                    )}
+                  </View>
                   <View style={styles.itemsPill}>
                     <Text style={styles.itemsPillText}>{item.items}</Text>
                   </View>
@@ -184,16 +295,21 @@ export default function TransactionScreen() {
                 <Text style={styles.dateText}>
                   {item.date} • {item.time}
                 </Text>
-                <View style={styles.typePill}>
-                  <Text
-                    style={[
-                      styles.typePillText,
-                      { color: isIncome ? COLORS.green : COLORS.red },
-                    ]}
-                  >
-                    {item.type}
+                {isPending && (
+                  <Text style={[
+                    styles.pendingText,
+                    item.mutationStatus === "completed" && styles.syncedText
+                  ]}>
+                    {item.mutationStatus === "completed" 
+                      ? "Synced ✓" 
+                      : item.mutationStatus === "syncing" 
+                      ? "Syncing..." 
+                      : item.mutationStatus === "error"
+                      ? `Failed: ${item.errorMessage?.substring(0, 30) || "Sync failed"}`
+                      : "Pending sync"
+                    }
                   </Text>
-                </View>
+                )}
               </View>
             </View>
           </View>
@@ -283,6 +399,9 @@ export default function TransactionScreen() {
         backgroundColor={COLORS.primaryBlue}
       />
 
+      {/* Offline Indicator */}
+      <OfflineIndicator />
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -292,12 +411,15 @@ export default function TransactionScreen() {
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Transaction</Text>
-        <TouchableOpacity style={styles.headerButton}>
-          <HelpTooltip
-            title="Transactions Help"
-            content="View all your income and expenses in one place. Filter by income or expenses, expand each item to see details, and track your daily, weekly, or monthly financial activity. Transactions are automatically organized by date."
-          />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <SyncBadge compact />
+          <TouchableOpacity style={styles.headerButton}>
+            <HelpTooltip
+              title="Transactions Help"
+              content="View all your income and expenses in one place. Filter by income or expenses, expand each item to see details, and track your daily, weekly, or monthly financial activity. Transactions are automatically organized by date."
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main Content Body */}
@@ -318,7 +440,7 @@ export default function TransactionScreen() {
               </View>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.summaryLabel}>Income</Text>
+              <Text style={styles.summaryLabel}>Sales</Text>
               <Text style={styles.summaryAmount}>
                 ₱
                 {financialSummary?.totalIncome?.toLocaleString("en-US", {
@@ -413,6 +535,11 @@ const styles = StyleSheet.create({
   },
   headerButton: {
     padding: 5,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   helpIconBg: {
     backgroundColor: COLORS.white,
@@ -712,5 +839,33 @@ const styles = StyleSheet.create({
   loadingMoreText: {
     fontSize: 14,
     color: COLORS.textGray,
+  },
+  // Pending transaction styles
+  pendingCard: {
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.primaryBlue,
+    backgroundColor: "#f8faff",
+  },
+  pendingIconCircle: {
+    backgroundColor: "#3b6ea5", // Darker blue for pending
+    opacity: 0.8,
+  },
+  txIdRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  syncIndicator: {
+    marginLeft: 4,
+  },
+  pendingText: {
+    fontSize: 11,
+    color: COLORS.primaryBlue,
+    fontStyle: "italic",
+    marginTop: 2,
+  },
+  syncedText: {
+    color: COLORS.green,
+    fontStyle: "normal",
   },
 });

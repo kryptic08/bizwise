@@ -1,5 +1,5 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useRouter } from "expo-router";
 import { ArrowLeft, Pencil, Plus, Settings } from "lucide-react-native";
 import React, { useMemo, useState } from "react";
@@ -15,6 +15,8 @@ import {
 } from "react-native";
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
+import { OfflineIndicator } from "../components/OfflineIndicator";
+import { useCategories, useProducts } from "../hooks/useOfflineQueries";
 
 const { width } = Dimensions.get("window");
 
@@ -45,15 +47,9 @@ export default function CounterScreen() {
   const router = useRouter();
   const { user } = useAuth();
 
-  // Fetch products and categories from Convex
-  const allProducts = useQuery(
-    api.products.getProducts,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  const categories = useQuery(
-    api.categories.getCategories,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
+  // Fetch products and categories with offline caching
+  const { data: allProducts } = useProducts(user?.userId);
+  const { data: categories } = useCategories(user?.userId);
 
   // Mutations
   const updateProduct = useMutation(api.products.updateProduct);
@@ -78,17 +74,27 @@ export default function CounterScreen() {
   const productsByCategory = useMemo(() => {
     if (!allProducts || !categories) return {};
 
-    const productsWithQty = allProducts.map((product) => ({
+    interface ProductWithQty {
+      _id: string;
+      name: string;
+      price: number;
+      image: string;
+      category: string;
+      categoryId: string;
+      qty: number;
+    }
+
+    const productsWithQty: ProductWithQty[] = allProducts.map((product: { _id: string; name: string; price: number; image: string; category: string; categoryId: string }) => ({
       ...product,
       qty: quantities[product._id] || 0,
     }));
 
     // Group products by categoryId
-    const grouped: Record<string, typeof productsWithQty> = {};
+    const grouped: Record<string, ProductWithQty[]> = {};
 
-    categories.forEach((category) => {
+    categories.forEach((category: { _id: string; name: string }) => {
       grouped[category._id] = productsWithQty.filter(
-        (p) => p.categoryId === category._id,
+        (p: ProductWithQty) => p.categoryId === category._id,
       );
     });
 
@@ -113,7 +119,7 @@ export default function CounterScreen() {
     if (!allProducts) return "0.00";
 
     return allProducts
-      .reduce((sum, item) => {
+      .reduce((sum: number, item: { _id: string; price: number }) => {
         const qty = quantities[item._id] || 0;
         return sum + item.price * qty;
       }, 0)
@@ -204,6 +210,9 @@ export default function CounterScreen() {
         backgroundColor={COLORS.primaryBlue}
       />
 
+      {/* Offline Indicator */}
+      <OfflineIndicator />
+
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.iconButton}
@@ -211,7 +220,7 @@ export default function CounterScreen() {
         >
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Counter</Text>
+        <Text style={styles.headerTitle}>Sale Entry</Text>
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={styles.iconButton}
@@ -240,7 +249,7 @@ export default function CounterScreen() {
             </Text>
           </View>
         ) : (
-          categories.map((category) => {
+          categories.map((category: { _id: string; name: string }) => {
             const products = productsByCategory[category._id] || [];
 
             return (
@@ -275,7 +284,7 @@ export default function CounterScreen() {
                       No products in this category
                     </Text>
                   ) : (
-                    products.map((item) =>
+                    products.map((item: Product) =>
                       renderProductCard(item, category._id),
                     )
                   )}
@@ -297,8 +306,8 @@ export default function CounterScreen() {
             const totalItems = getTotalItems();
             if (totalItems > 0 && allProducts) {
               const cartItems = allProducts
-                .map((p) => ({ ...p, qty: quantities[p._id] || 0 }))
-                .filter((item) => item.qty > 0);
+                .map((p: { _id: string; name: string; price: number; image: string; category: string; categoryId: string }) => ({ ...p, qty: quantities[p._id] || 0 }))
+                .filter((item: { qty: number }) => item.qty > 0);
 
               router.push({
                 pathname: "/checkout",
@@ -310,7 +319,7 @@ export default function CounterScreen() {
           }}
         >
           <Text style={styles.checkoutText}>
-            Checkout {getTotalItems() > 0 ? `(${getTotalItems()})` : ""}
+            Sales Summary {getTotalItems() > 0 ? `(${getTotalItems()})` : ""}
           </Text>
         </TouchableOpacity>
       </View>

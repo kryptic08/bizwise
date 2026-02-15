@@ -63,25 +63,18 @@ const generateTransactionId = async (
   ctx: any,
   userId?: any,
 ): Promise<string> => {
-  const today = new Date();
-  const dateStr = today.toISOString().slice(0, 10); // YYYY-MM-DD
-
-  // Count sales today to get next number
-  let todaySales;
+  // Count all sales for the user to get unique sequential number
+  let allSales;
   if (userId) {
-    todaySales = await ctx.db
+    allSales = await ctx.db
       .query("sales")
       .withIndex("by_user", (q: any) => q.eq("userId", userId))
       .collect();
-    todaySales = todaySales.filter((s: any) => s.date === dateStr);
   } else {
-    todaySales = await ctx.db
-      .query("sales")
-      .withIndex("by_date", (q: any) => q.eq("date", dateStr))
-      .collect();
+    allSales = await ctx.db.query("sales").collect();
   }
 
-  const nextNumber = todaySales.length + 1;
+  const nextNumber = allSales.length + 1;
   return `SL-${nextNumber.toString().padStart(3, "0")}`;
 };
 

@@ -1,5 +1,4 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
-import { useMutation } from "convex/react";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
@@ -26,8 +25,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { api } from "../../convex/_generated/api";
+import { SyncBadge } from "../components/SyncBadge";
 import { useAuth } from "../context/AuthContext";
+import { useMutationQueue } from "../providers/MutationQueueProvider";
+import { useOffline } from "../providers/OfflineProvider";
 
 const COLORS = {
   primaryBlue: "#3b6ea5",
@@ -80,10 +81,8 @@ interface ExpenseItem {
 export default function AddExpenseScreen() {
   const router = useRouter();
   const { user } = useAuth();
-
-  // Convex mutations
-  const addExpenseGroup = useMutation(api.expenses.addExpenseGroup);
-  const generateUploadUrl = useMutation(api.files.generateUploadUrl);
+  const { isOnline } = useOffline();
+  const { addMutation } = useMutationQueue();
 
   const [expenses, setExpenses] = useState<ExpenseItem[]>([
     {
@@ -212,30 +211,6 @@ export default function AddExpenseScreen() {
     );
   };
 
-  const uploadImageToConvex = async (imageUri: string) => {
-    try {
-      // Get upload URL from Convex
-      const uploadUrl = await generateUploadUrl();
-
-      // Read the file as blob
-      const response = await fetch(imageUri);
-      const blob = await response.blob();
-
-      // Upload to Convex storage
-      const result = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": blob.type },
-        body: blob,
-      });
-
-      const { storageId } = await result.json();
-      return storageId;
-    } catch (error) {
-      console.error("Error uploading image to Convex:", error);
-      return null;
-    }
-  };
-
   const handleSave = async () => {
     // Validate expenses
     const validExpenses = expenses.filter(
@@ -273,12 +248,14 @@ export default function AddExpenseScreen() {
                 title: expense.title,
                 amount: parseFloat(expense.amount),
                 quantity: parseInt(expense.quantity) || 1,
+                total: parseFloat(expense.total || "0"),
               }));
 
-              await addExpenseGroup({
+              // Add to mutation queue (works offline)
+              const tempId = await addMutation("expense", {
                 items,
-                userId: user?.userId!,
-                clientTimestamp: Date.now(), // Pass device timestamp
+                userId: user?.userId || "",
+                clientTimestamp: Date.now(),
               });
 
               // Reset form after successful save
@@ -296,9 +273,18 @@ export default function AddExpenseScreen() {
               setScanComplete(false);
               setScanError(false);
 
-              Alert.alert("Success", "Expenses saved successfully!", [
-                { text: "OK", onPress: () => router.back() },
-              ]);
+              // Show appropriate message based on online status
+              if (isOnline) {
+                Alert.alert("Success", `Expenses saved successfully!\nTransaction ID: ${tempId}`, [
+                  { text: "OK", onPress: () => router.back() },
+                ]);
+              } else {
+                Alert.alert(
+                  "Saved Offline",
+                  `Transaction ID: ${tempId}\n\nExpenses saved locally and will sync when you're back online.`,
+                  [{ text: "OK", onPress: () => router.back() }],
+                );
+              }
             } catch (error) {
               console.error("Error saving expenses:", error);
               Alert.alert(
@@ -513,6 +499,13 @@ For each item found, provide:
 2. amount: The unit price (number only, no currency symbol)
 3. quantity: How many were purchased (default to 1 if not specified)
 4. category: One of these categories: Raw Materials, Packaging Materials, Store Supplies, Utilities, Equipment, Transportation, General
+
+MERGE DUPLICATE ITEMS:
+- If you see the SAME product name multiple times on the receipt (same item appearing on different lines), DO NOT create multiple separate items
+- Instead, combine them into ONE item with the total quantity
+- Example: If you see "Rice - ₱25" and "Rice - ₱25" on separate lines, return ONE item: {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}
+- Example: If you see "Chicken x2 - ₱150" and "Chicken x1 - ₱150", return ONE item: {"title": "Chicken", "amount": 150, "quantity": 3, "category": "Raw Materials"}
+- Only merge items that have the EXACT same name and unit price
 
 CATEGORY GUIDELINES:
 - Raw Materials: ingredients, food items, meat, vegetables, flour, sugar, etc.
@@ -1208,12 +1201,15 @@ If no items found or image is unclear, return: []`;
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Add Expense</Text>
-        <TouchableOpacity style={styles.headerButton}>
-          <HelpTooltip
-            title="Add Expense Help"
-            content="Add business expenses manually or scan receipts with your camera. The OCR scanner will automatically extract item details. You can add multiple items, edit quantities and prices, then save all at once."
-          />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <SyncBadge compact />
+          <TouchableOpacity style={styles.headerButton}>
+            <HelpTooltip
+              title="Add Expense Help"
+              content="Add business expenses manually or scan receipts with your camera. The OCR scanner will automatically extract item details. You can add multiple items, edit quantities and prices, then save all at once."
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Content */}
@@ -1519,6 +1515,11 @@ const styles = StyleSheet.create({
   headerButton: {
     padding: 5,
     width: 34,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   helpCircleBg: {
     backgroundColor: COLORS.white,

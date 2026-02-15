@@ -1,5 +1,7 @@
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ReactNode } from "react";
+import { MutationQueueProvider } from "./MutationQueueProvider";
+import { OfflineProvider } from "./OfflineProvider";
 
 // Initialize the Convex client
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!);
@@ -11,5 +13,13 @@ interface ConvexClientProviderProps {
 export default function ConvexClientProvider({
   children,
 }: ConvexClientProviderProps) {
-  return <ConvexProvider client={convex}>{children}</ConvexProvider>;
+  return (
+    <OfflineProvider>
+      <ConvexProvider client={convex}>
+        <MutationQueueProvider>
+          {children}
+        </MutationQueueProvider>
+      </ConvexProvider>
+    </OfflineProvider>
+  );
 }

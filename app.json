@@ -13,7 +13,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#3b6ea5"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bizwise.expensemanager"
@@ -29,7 +31,15 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -64,8 +74,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "45c956dd-a853-4a7c-a487-241feeeb69d2"
+        "projectId": "ae17c511-32ab-43b3-a9c1-0e5e9e1615d8"
       }
-    }
+    },
+    "owner": "devaxsc"
   }
 }
