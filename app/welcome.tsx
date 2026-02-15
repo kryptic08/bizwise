@@ -7,7 +7,7 @@ import { useAuth } from "./context/AuthContext";
 
 export default function WelcomeScreen() {
   const router = useRouter();
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, isPinLocked } = useAuth();
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState<boolean | null>(
     null,
   );
@@ -29,22 +29,29 @@ export default function WelcomeScreen() {
   useEffect(() => {
     if (isLoading || hasSeenOnboarding === null) return;
 
-    // Show welcome screen for 2 seconds, then navigate based on state
-    const timer = setTimeout(() => {
-      if (user) {
-        // User is logged in, go to main app
-        router.replace("/(tabs)");
-      } else if (hasSeenOnboarding) {
-        // User has seen onboarding before, go to login
-        router.replace("/login");
-      } else {
-        // First time user, show onboarding
-        router.replace("/onboarding");
-      }
-    }, 2000);
+    if (isPinLocked) {
+      const timer = setTimeout(() => {
+        router.replace("/pin-entry");
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
 
-    return () => clearTimeout(timer);
-  }, [isLoading, user, hasSeenOnboarding, router]);
+    if (user) {
+      if (!user.pin) {
+        router.replace("/pin-setup");
+      } else {
+        router.replace("/(tabs)");
+      }
+      return;
+    }
+
+    if (!hasSeenOnboarding) {
+      router.replace("/onboarding");
+      return;
+    }
+
+    router.replace("/login");
+  }, [isLoading, user, hasSeenOnboarding, isPinLocked, router]);
 
   return (
     <View style={styles.container}>

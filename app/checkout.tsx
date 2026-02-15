@@ -259,14 +259,6 @@ export default function CheckoutScreen() {
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {/* Order Summary Header */}
-            <View style={styles.summaryHeader}>
-              <Text style={styles.summaryTitle}>Sales Summary</Text>
-              <Text style={styles.summarySubtitle}>
-                {getTotalItems()} items
-              </Text>
-            </View>
-
             {/* Cart Items */}
             <View style={styles.cartContainer}>
               {cartItems.length > 0 ? (

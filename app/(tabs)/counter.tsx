@@ -220,7 +220,7 @@ export default function CounterScreen() {
         >
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Sale Entry</Text>
+        <Text style={styles.headerTitle}>Sales Entry</Text>
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={styles.iconButton}

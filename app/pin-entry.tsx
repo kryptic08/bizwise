@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   StatusBar,
@@ -43,9 +43,7 @@ const NumberButton = ({ num, onPress, disabled }: { num: string; onPress: () => 
     activeOpacity={0.7}
     disabled={disabled}
   >
-    <Text style={[styles.numberText, disabled && styles.disabledText]}>
-      {num}
-    </Text>
+    <Text style={[styles.numberText, disabled && styles.disabledText]}>{num}</Text>
   </TouchableOpacity>
 );
 
@@ -120,8 +118,6 @@ export default function PinEntryScreen() {
     );
   };
 
-  const handleNumberPress = (num: string) => () => handleNumber(num);
-
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primaryBlue} />
@@ -141,28 +137,27 @@ export default function PinEntryScreen() {
         <Text style={styles.subtitle}>Welcome back, {userName}</Text>
 
         <PinDots length={pin.length} error={!!error} />
-
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <View style={styles.numberPad}>
           <View style={styles.numberRow}>
-            <NumberButton num="1" onPress={handleNumberPress("1")} disabled={isVerifying} />
-            <NumberButton num="2" onPress={handleNumberPress("2")} disabled={isVerifying} />
-            <NumberButton num="3" onPress={handleNumberPress("3")} disabled={isVerifying} />
+            <NumberButton num="1" onPress={() => handleNumber("1")} disabled={isVerifying} />
+            <NumberButton num="2" onPress={() => handleNumber("2")} disabled={isVerifying} />
+            <NumberButton num="3" onPress={() => handleNumber("3")} disabled={isVerifying} />
           </View>
           <View style={styles.numberRow}>
-            <NumberButton num="4" onPress={handleNumberPress("4")} disabled={isVerifying} />
-            <NumberButton num="5" onPress={handleNumberPress("5")} disabled={isVerifying} />
-            <NumberButton num="6" onPress={handleNumberPress("6")} disabled={isVerifying} />
+            <NumberButton num="4" onPress={() => handleNumber("4")} disabled={isVerifying} />
+            <NumberButton num="5" onPress={() => handleNumber("5")} disabled={isVerifying} />
+            <NumberButton num="6" onPress={() => handleNumber("6")} disabled={isVerifying} />
           </View>
           <View style={styles.numberRow}>
-            <NumberButton num="7" onPress={handleNumberPress("7")} disabled={isVerifying} />
-            <NumberButton num="8" onPress={handleNumberPress("8")} disabled={isVerifying} />
-            <NumberButton num="9" onPress={handleNumberPress("9")} disabled={isVerifying} />
+            <NumberButton num="7" onPress={() => handleNumber("7")} disabled={isVerifying} />
+            <NumberButton num="8" onPress={() => handleNumber("8")} disabled={isVerifying} />
+            <NumberButton num="9" onPress={() => handleNumber("9")} disabled={isVerifying} />
           </View>
           <View style={styles.numberRow}>
             <View style={styles.numberButton} />
-            <NumberButton num="0" onPress={handleNumberPress("0")} disabled={isVerifying} />
+            <NumberButton num="0" onPress={() => handleNumber("0")} disabled={isVerifying} />
             <DeleteButton onPress={handleDelete} disabled={isVerifying} />
           </View>
         </View>
@@ -177,6 +172,8 @@ export default function PinEntryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.primaryBlue },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { color: COLORS.white, fontSize: 18 },
   header: { paddingTop: 60, paddingBottom: 40, alignItems: "center" },
   appName: { fontSize: 32, fontWeight: "800", color: COLORS.white, marginTop: 16 },
   content: { flex: 1, backgroundColor: COLORS.white, borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingTop: 10, paddingHorizontal: 20, paddingBottom: 40, alignItems: "center" },
