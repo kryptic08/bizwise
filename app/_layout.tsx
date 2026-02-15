@@ -28,13 +28,11 @@ function RootLayoutNav() {
   const segments = useSegments();
   const isMounted = useRef(false);
   const routerRef = useRef(router);
+  const isNavigating = useRef(false);
 
   useEffect(() => {
     routerRef.current = router;
   }, [router]);
-
-  const currentScreen = segments[0];
-  const isOnPinScreen = currentScreen === "pin-entry" || currentScreen === "pin-setup";
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -55,7 +53,14 @@ function RootLayoutNav() {
       return;
     }
 
-    if (isLoading || showWelcome || isOnPinScreen) {
+    if (isLoading || showWelcome || isNavigating.current) {
+      return;
+    }
+
+    const currentScreen = segments[0];
+    const isOnPinScreen = currentScreen === "pin-entry" || currentScreen === "pin-setup";
+
+    if (isOnPinScreen) {
       return;
     }
 
@@ -67,15 +72,23 @@ function RootLayoutNav() {
       currentScreen === "reset";
 
     if (!user && inAuthGroup) {
+      isNavigating.current = true;
       routerRef.current.replace("/welcome");
     } else if (user && isPinLocked) {
+      isNavigating.current = true;
       routerRef.current.replace("/pin-entry");
     } else if (user && !user.pin) {
+      isNavigating.current = true;
       routerRef.current.replace("/pin-setup");
     } else if (user && !isPinLocked && onAuthScreen) {
+      isNavigating.current = true;
       routerRef.current.replace("/(tabs)");
     }
-  }, [user, isLoading, isPinLocked, currentScreen, showWelcome, isOnPinScreen]);
+
+    setTimeout(() => {
+      isNavigating.current = false;
+    }, 100);
+  }, [user, isLoading, isPinLocked, segments, showWelcome]);
 
   if (showWelcome || isLoading) {
     return null;

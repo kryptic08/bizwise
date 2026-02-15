@@ -8,6 +8,7 @@ import React, {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -60,14 +61,12 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error">("idle");
 
   useEffect(() => {
-    // Load last sync time
     AsyncStorage.getItem("bizwise_last_sync").then((timestamp) => {
       if (timestamp) {
         setLastSyncTime(new Date(parseInt(timestamp)));
       }
     });
 
-    // Monitor network status
     const unsubscribe = NetInfo.addEventListener((state) => {
       const online =
         state.isConnected === true &&
@@ -112,15 +111,18 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
     }
   }, [isOnline]);
 
+  const value = useMemo(
+    () => ({
+      isOnline,
+      lastSyncTime,
+      isSyncing,
+      syncStatus,
+    }),
+    [isOnline, lastSyncTime, isSyncing, syncStatus]
+  );
+
   return (
-    <OfflineContext.Provider
-      value={{
-        isOnline,
-        lastSyncTime,
-        isSyncing,
-        syncStatus,
-      }}
-    >
+    <OfflineContext.Provider value={value}>
       <PersistQueryClientProvider
         client={queryClient}
         persistOptions={{

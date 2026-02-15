@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { api } from "../../convex/_generated/api";
@@ -274,21 +275,35 @@ export function MutationQueueProvider({
   const syncingCount = queue.filter((item) => item.status === "syncing").length;
   const errorCount = queue.filter((item) => item.status === "error").length;
 
+  const value = useMemo(
+    () => ({
+      queue,
+      pendingCount,
+      syncingCount,
+      errorCount,
+      addMutation,
+      removeMutation,
+      retryMutation,
+      syncNow,
+      getLocalTransactions,
+      isSyncing: isProcessing,
+    }),
+    [
+      queue,
+      pendingCount,
+      syncingCount,
+      errorCount,
+      addMutation,
+      removeMutation,
+      retryMutation,
+      syncNow,
+      getLocalTransactions,
+      isProcessing,
+    ]
+  );
+
   return (
-    <MutationQueueContext.Provider
-      value={{
-        queue,
-        pendingCount,
-        syncingCount,
-        errorCount,
-        addMutation,
-        removeMutation,
-        retryMutation,
-        syncNow,
-        getLocalTransactions,
-        isSyncing: isProcessing,
-      }}
-    >
+    <MutationQueueContext.Provider value={value}>
       {children}
     </MutationQueueContext.Provider>
   );
