@@ -1,6 +1,6 @@
 import { useMutation } from "convex/react";
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
   StatusBar,
@@ -92,13 +92,14 @@ export default function PinSetupScreen() {
   const [firstPin, setFirstPin] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  
   const setPinMutation = useMutation(api.users.setPin);
   
-  const stateRef = useRef({ pin, step, firstPin, isSaving, user });
+  const userRef = useRef(user);
+  userRef.current = user;
   
-  useEffect(() => {
-    stateRef.current = { pin, step, firstPin, isSaving, user };
-  }, [pin, step, firstPin, isSaving, user]);
+  const stateRef = useRef({ pin, step, firstPin, isSaving, user: userRef.current });
+  stateRef.current = { pin, step, firstPin, isSaving, user: userRef.current };
 
   const title = useMemo(() => step === "enter" ? "Create PIN" : "Confirm PIN", [step]);
   const subtitle = useMemo(() => step === "enter"

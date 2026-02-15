@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
   StatusBar,
@@ -94,13 +94,13 @@ export default function PinEntryScreen() {
   const [error, setError] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   
-  const stateRef = useRef({ pin, isVerifying, user });
+  const userRef = useRef(user);
+  userRef.current = user;
   
-  useEffect(() => {
-    stateRef.current = { pin, isVerifying, user };
-  }, [pin, isVerifying, user]);
+  const stateRef = useRef({ pin, isVerifying, user: userRef.current });
+  stateRef.current = { pin, isVerifying, user: userRef.current };
 
-  const userName = useMemo(() => user?.name || "User", [user?.name]);
+  const userName = useMemo(() => user?.name ?? "User", [user]);
 
   const handleNumberPress = useCallback((num: string) => {
     const { pin: currentPin, isVerifying: verifying } = stateRef.current;
