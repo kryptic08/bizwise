@@ -28,6 +28,9 @@ function RootLayoutNav() {
   const segments = useSegments();
   const navigationInProgress = useRef(false);
 
+  // Track if we're on a PIN screen to prevent re-navigation
+  const isOnPinScreen = useRef(false);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowWelcome(false);
@@ -41,7 +44,21 @@ function RootLayoutNav() {
     }
   }, [user, isPinLocked, isLoading]);
 
+  // Determine current screen
+  const currentScreen = segments[0];
+  const isOnPinEntry = currentScreen === "pin-entry";
+  const isOnPinSetup = currentScreen === "pin-setup";
+  const isPinScreen = isOnPinEntry || isOnPinSetup;
+
+  // Update ref when on PIN screen
+  isOnPinScreen.current = isPinScreen;
+
   useEffect(() => {
+    // Don't navigate if already on PIN screen and user is locked
+    if (isPinScreen && user && isPinLocked) {
+      return;
+    }
+
     if (!isLoading && !showWelcome && !navigationInProgress.current) {
       const inAuthGroup = segments[0] === "(tabs)";
       const onAuthScreen =
@@ -49,9 +66,6 @@ function RootLayoutNav() {
         segments[0] === "onboarding" ||
         segments[0] === "login" ||
         segments[0] === "reset";
-      const onPinEntryScreen = segments[0] === "pin-entry";
-      const onPinSetupScreen = segments[0] === "pin-setup";
-      const onPinScreen = onPinEntryScreen || onPinSetupScreen;
 
       if (!user && inAuthGroup) {
         navigationInProgress.current = true;
@@ -59,19 +73,19 @@ function RootLayoutNav() {
         setTimeout(() => {
           navigationInProgress.current = false;
         }, 100);
-      } else if (user && isPinLocked && !onPinEntryScreen) {
+      } else if (user && isPinLocked && !isOnPinEntry) {
         navigationInProgress.current = true;
         router.replace("/pin-entry");
         setTimeout(() => {
           navigationInProgress.current = false;
         }, 100);
-      } else if (user && !user.pin && !onPinSetupScreen) {
+      } else if (user && !user.pin && !isOnPinSetup) {
         navigationInProgress.current = true;
         router.replace("/pin-setup");
         setTimeout(() => {
           navigationInProgress.current = false;
         }, 100);
-      } else if (user && !isPinLocked && onAuthScreen && !onPinScreen) {
+      } else if (user && !isPinLocked && onAuthScreen && !isPinScreen) {
         navigationInProgress.current = true;
         router.replace("/(tabs)");
         setTimeout(() => {
@@ -79,7 +93,7 @@ function RootLayoutNav() {
         }, 100);
       }
     }
-  }, [user, isLoading, isPinLocked, segments, showWelcome]);
+  }, [user, isLoading, isPinLocked, segments, showWelcome, isOnPinEntry, isOnPinSetup]);
 
   if (showWelcome || isLoading) {
     return null;

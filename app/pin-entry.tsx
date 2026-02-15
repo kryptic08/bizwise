@@ -93,77 +93,98 @@ export default function PinEntryScreen() {
   const { user, unlockWithPin, logout } = useAuth();
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
+  const [errorCount, setErrorCount] = useState(0);
   const [isVerifying, setIsVerifying] = useState(false);
   
-  // Refs to avoid re-renders
-  const userRef = useRef(user);
-  const isVerifyingRef = useRef(false);
-  const pinRef = useRef("");
-  const hasMounted = useRef(false);
+  // Single ref to track all values
+  const stateRef = useRef({
+    user: user,
+    pin: "",
+    isVerifying: false,
+  });
   
-  // Memoize userName to prevent subtitle re-render
-  const userName = useMemo(() => user?.name || "User", [user?.name]);
-  
-  // Update refs when values change
+  // Keep ref in sync
   useEffect(() => {
-    userRef.current = user;
+    stateRef.current.user = user;
   }, [user]);
-  
+
   useEffect(() => {
-    pinRef.current = pin;
+    stateRef.current.pin = pin;
   }, [pin]);
 
-  // Initial redirect check - only runs once on mount
   useEffect(() => {
-    if (hasMounted.current) return;
-    hasMounted.current = true;
-    
-    if (!user || !user.pin) {
-      router.replace("/login");
-    }
-  }, []);
+    stateRef.current.isVerifying = isVerifying;
+  }, [isVerifying]);
 
+  // Memoize userName - only recomputes when user?.name changes
+  const userName = useMemo(() => user?.name || "User", [user?.name]);
+
+  // Clear error when user types
+  const handleClearError = useCallback(() => {
+    if (error) setError("");
+  }, [error]);
+
+  // Stable callbacks with no dependencies
   const handleNumberPress = useCallback((num: string) => {
-    if (isVerifyingRef.current || pinRef.current.length >= 4) return;
+    if (stateRef.current.isVerifying || stateRef.current.pin.length >= 4) return;
     
-    const newPin = pinRef.current + num;
+    // Clear error when user starts typing
+    if (error) {
+      setError("");
+    }
+    
+    const newPin = stateRef.current.pin + num;
     setPin(newPin);
     setError("");
 
     if (newPin.length === 4) {
-      isVerifyingRef.current = true;
+      stateRef.current.isVerifying = true;
+      setIsVerifying(true);
+      
       setTimeout(() => {
-        verifyPin(newPin);
+        const currentUser = stateRef.current.user;
+        
+        // Check if user exists and has PIN set
+        if (!currentUser || !currentUser.pin) {
+          Vibration.vibrate(500);
+          setError("PIN not set up. Please log out and try again.");
+          setPin("");
+          stateRef.current.pin = "";
+          stateRef.current.isVerifying = false;
+          setIsVerifying(false);
+          return;
+        }
+        
+        // Compare PINs
+        if (currentUser.pin === newPin) {
+          // Success
+          unlockWithPin();
+          router.replace("/(tabs)");
+        } else {
+          // Wrong PIN
+          Vibration.vibrate(500);
+          const newCount = errorCount + 1;
+          setErrorCount(newCount);
+          
+          if (newCount >= 5) {
+            setError(`Wrong PIN. ${5 - newCount} attempts left before lockout.`);
+          } else {
+            setError("Incorrect PIN. Please try again.");
+          }
+          setPin("");
+          stateRef.current.pin = "";
+        }
+        stateRef.current.isVerifying = false;
+        setIsVerifying(false);
       }, 100);
     }
-  }, []);
+  }, [error, errorCount, unlockWithPin, router]);
 
   const handleDelete = useCallback(() => {
+    if (stateRef.current.isVerifying) return;
     setPin((prev) => prev.slice(0, -1));
     setError("");
   }, []);
-
-  const verifyPin = useCallback(async (pinToVerify: string) => {
-    const currentUser = userRef.current;
-    if (!currentUser || !currentUser.pin) return;
-    
-    setIsVerifying(true);
-    try {
-      if (currentUser.pin === pinToVerify) {
-        unlockWithPin();
-        router.replace("/(tabs)");
-      } else {
-        throw new Error("Incorrect PIN");
-      }
-    } catch (err: any) {
-      Vibration.vibrate(500);
-      setError("Incorrect PIN");
-      setPin("");
-    } finally {
-      isVerifyingRef.current = false;
-      setIsVerifying(false);
-    }
-  }, [unlockWithPin, router]);
 
   const handleForgotPin = useCallback(() => {
     Alert.alert(
@@ -182,6 +203,12 @@ export default function PinEntryScreen() {
       ],
     );
   }, [logout, router]);
+
+  // Get error message based on error state
+  const getErrorMessage = () => {
+    if (!error) return null;
+    return error;
+  };
 
   return (
     <View style={styles.container}>
@@ -213,7 +240,14 @@ export default function PinEntryScreen() {
 
         <PinDots length={pin.length} error={!!error} verifying={isVerifying} />
 
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        {error ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity onPress={handleClearError}>
+              <Text style={styles.errorDismiss}>Tap to dismiss</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         <NumberPad 
           onNumberPress={handleNumberPress} 
@@ -293,7 +327,21 @@ const styles = StyleSheet.create({
   errorText: {
     color: COLORS.error,
     fontSize: 14,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  errorContainer: {
+    backgroundColor: "#fee2e2",
+    padding: 12,
+    borderRadius: 8,
     marginBottom: 20,
+    alignItems: "center",
+  },
+  errorDismiss: {
+    color: COLORS.error,
+    fontSize: 12,
+    marginTop: 4,
+    textDecorationLine: "underline",
   },
   numberPad: {
     marginTop: 40,

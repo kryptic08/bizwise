@@ -90,32 +90,33 @@ export default function PinSetupScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const setPinMutation = useMutation(api.users.setPin);
 
-  // Refs to avoid re-renders
-  const pinRef = useRef("");
-  const firstPinRef = useRef("");
-  const stepRef = useRef("enter");
-  const isSavingRef = useRef(false);
-  const userRef = useRef(user);
-  const hasMounted = useRef(false);
+  // Single ref to track all values
+  const stateRef = useRef({
+    user: user,
+    pin: "",
+    firstPin: "",
+    step: "enter" as "enter" | "confirm",
+    isSaving: false,
+  });
 
-  // Update refs when values change
+  // Keep ref in sync
   useEffect(() => {
-    userRef.current = user;
+    stateRef.current.user = user;
   }, [user]);
 
   useEffect(() => {
-    pinRef.current = pin;
+    stateRef.current.pin = pin;
   }, [pin]);
 
   useEffect(() => {
-    stepRef.current = step;
+    stateRef.current.step = step;
   }, [step]);
 
   useEffect(() => {
-    isSavingRef.current = isSaving;
+    stateRef.current.isSaving = isSaving;
   }, [isSaving]);
 
-  // Memoize values to prevent re-renders
+  // Memoize values - only recompute when step changes
   const stepData = useMemo(() => ({
     title: step === "enter" ? "Create PIN" : "Confirm PIN",
     subtitle: step === "enter"
@@ -124,24 +125,24 @@ export default function PinSetupScreen() {
   }), [step]);
 
   const handleNumberPress = useCallback((num: string) => {
-    if (pinRef.current.length >= 4 || isSavingRef.current) return;
+    if (stateRef.current.pin.length >= 4 || stateRef.current.isSaving) return;
     
-    const newPin = pinRef.current + num;
+    const newPin = stateRef.current.pin + num;
     setPin(newPin);
     setError("");
 
     if (newPin.length === 4) {
-      if (stepRef.current === "enter") {
-        firstPinRef.current = newPin;
+      if (stateRef.current.step === "enter") {
+        stateRef.current.firstPin = newPin;
         setPin("");
         setStep("confirm");
       } else {
-        if (newPin === firstPinRef.current) {
+        if (newPin === stateRef.current.firstPin) {
           savePin(newPin);
         } else {
           setError("PINs don't match. Try again.");
           setPin("");
-          firstPinRef.current = "";
+          stateRef.current.firstPin = "";
           setStep("enter");
         }
       }
@@ -154,10 +155,12 @@ export default function PinSetupScreen() {
   }, []);
 
   const savePin = useCallback(async (pinToSave: string) => {
-    const currentUser = userRef.current;
-    if (isSavingRef.current || !currentUser) return;
+    const currentUser = stateRef.current.user;
+    if (stateRef.current.isSaving || !currentUser) return;
     
     setIsSaving(true);
+    stateRef.current.isSaving = true;
+    
     try {
       await setPinMutation({
         userId: currentUser.userId,
@@ -175,10 +178,11 @@ export default function PinSetupScreen() {
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to set PIN");
       setPin("");
-      firstPinRef.current = "";
+      stateRef.current.firstPin = "";
       setStep("enter");
     } finally {
       setIsSaving(false);
+      stateRef.current.isSaving = false;
     }
   }, [setPinMutation, login, router]);
 
