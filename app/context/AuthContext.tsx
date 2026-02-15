@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Id } from "../../convex/_generated/dataModel";
 
 interface User {
@@ -31,7 +31,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isPinLocked, setIsPinLocked] = useState(false);
 
-  // Load user from storage on mount
   useEffect(() => {
     const loadUser = async () => {
       try {
@@ -40,7 +39,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const userData = JSON.parse(storedUser);
           setUser(userData);
 
-          // Check if user has PIN and should be locked
           if (userData.pin) {
             setIsPinLocked(true);
           }
@@ -55,12 +53,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadUser();
   }, []);
 
-  const login = async (userData: User) => {
+  const login = useCallback(async (userData: User) => {
     try {
       await AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userData));
       setUser(userData);
 
-      // If user has PIN, lock immediately
       if (userData.pin) {
         setIsPinLocked(true);
       }
@@ -68,9 +65,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("Error saving user to storage:", error);
       throw error;
     }
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await AsyncStorage.removeItem(USER_STORAGE_KEY);
       await AsyncStorage.removeItem(PIN_LOCK_KEY);
@@ -81,30 +78,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("Error removing user from storage:", error);
       throw error;
     }
-  };
+  }, []);
 
-  const unlockWithPin = () => {
+  const unlockWithPin = useCallback(() => {
     setIsPinLocked(false);
-  };
+  }, []);
 
-  const lockWithPin = () => {
-    if (user?.pin) {
-      setIsPinLocked(true);
-    }
-  };
+  const lockWithPin = useCallback(() => {
+    setIsPinLocked((prev) => {
+      if (prev && user?.pin) return true;
+      return user?.pin ? true : false;
+    });
+  }, [user?.pin]);
+
+  const value = useMemo(
+    () => ({
+      user,
+      isLoading,
+      isPinLocked,
+      login,
+      logout,
+      unlockWithPin,
+      lockWithPin,
+    }),
+    [user, isLoading, isPinLocked, login, logout, unlockWithPin, lockWithPin]
+  );
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isLoading,
-        isPinLocked,
-        login,
-        logout,
-        unlockWithPin,
-        lockWithPin,
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

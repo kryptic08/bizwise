@@ -21,7 +21,7 @@ const COLORS = {
   error: "#ef4444",
 };
 
-const PinDots = React.memo(({ length, error, verifying }: { length: number; error: boolean; verifying: boolean }) => (
+const PinDots = React.memo(({ length, error }: { length: number; error: boolean }) => (
   <View style={styles.pinDotsContainer}>
     {[0, 1, 2, 3].map((index) => (
       <View
@@ -30,7 +30,6 @@ const PinDots = React.memo(({ length, error, verifying }: { length: number; erro
           styles.pinDot,
           length > index && styles.pinDotFilled,
           error && styles.pinDotError,
-          verifying && styles.pinDotVerifying,
         ]}
       />
     ))}
@@ -93,95 +92,53 @@ export default function PinEntryScreen() {
   const { user, unlockWithPin, logout } = useAuth();
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
-  const [errorCount, setErrorCount] = useState(0);
   const [isVerifying, setIsVerifying] = useState(false);
   
-  // Single ref to track all values
-  const stateRef = useRef({
-    user: user,
-    pin: "",
-    isVerifying: false,
-  });
+  const stateRef = useRef({ pin, isVerifying, user });
   
-  // Keep ref in sync
   useEffect(() => {
-    stateRef.current.user = user;
-  }, [user]);
+    stateRef.current = { pin, isVerifying, user };
+  }, [pin, isVerifying, user]);
 
-  useEffect(() => {
-    stateRef.current.pin = pin;
-  }, [pin]);
-
-  useEffect(() => {
-    stateRef.current.isVerifying = isVerifying;
-  }, [isVerifying]);
-
-  // Memoize userName - only recomputes when user?.name changes
   const userName = useMemo(() => user?.name || "User", [user?.name]);
 
-  // Clear error when user types
-  const handleClearError = useCallback(() => {
-    if (error) setError("");
-  }, [error]);
-
-  // Stable callbacks with no dependencies
   const handleNumberPress = useCallback((num: string) => {
-    if (stateRef.current.isVerifying || stateRef.current.pin.length >= 4) return;
+    const { pin: currentPin, isVerifying: verifying } = stateRef.current;
+    if (verifying || currentPin.length >= 4) return;
     
-    // Clear error when user starts typing
-    if (error) {
-      setError("");
-    }
-    
-    const newPin = stateRef.current.pin + num;
+    const newPin = currentPin + num;
     setPin(newPin);
     setError("");
 
     if (newPin.length === 4) {
-      stateRef.current.isVerifying = true;
       setIsVerifying(true);
       
       setTimeout(() => {
-        const currentUser = stateRef.current.user;
-        
-        // Check if user exists and has PIN set
+        const { user: currentUser } = stateRef.current;
         if (!currentUser || !currentUser.pin) {
           Vibration.vibrate(500);
           setError("PIN not set up. Please log out and try again.");
           setPin("");
-          stateRef.current.pin = "";
-          stateRef.current.isVerifying = false;
           setIsVerifying(false);
           return;
         }
         
-        // Compare PINs
         if (currentUser.pin === newPin) {
-          // Success
           unlockWithPin();
           router.replace("/(tabs)");
         } else {
-          // Wrong PIN
           Vibration.vibrate(500);
-          const newCount = errorCount + 1;
-          setErrorCount(newCount);
-          
-          if (newCount >= 5) {
-            setError(`Wrong PIN. ${5 - newCount} attempts left before lockout.`);
-          } else {
-            setError("Incorrect PIN. Please try again.");
-          }
+          setError("Incorrect PIN. Please try again.");
           setPin("");
-          stateRef.current.pin = "";
         }
-        stateRef.current.isVerifying = false;
         setIsVerifying(false);
-      }, 100);
+      }, 150);
     }
-  }, [error, errorCount, unlockWithPin, router]);
+  }, [unlockWithPin, router]);
 
   const handleDelete = useCallback(() => {
-    if (stateRef.current.isVerifying) return;
+    const { isVerifying: verifying } = stateRef.current;
+    if (verifying) return;
     setPin((prev) => prev.slice(0, -1));
     setError("");
   }, []);
@@ -204,20 +161,10 @@ export default function PinEntryScreen() {
     );
   }, [logout, router]);
 
-  // Get error message based on error state
-  const getErrorMessage = () => {
-    if (!error) return null;
-    return error;
-  };
-
   return (
     <View style={styles.container}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor={COLORS.primaryBlue}
-      />
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.primaryBlue} />
 
-      {/* Header */}
       <View style={styles.header}>
         <Svg width="40" height="44" viewBox="0 0 118 124" fill="none">
           <Path
@@ -231,21 +178,15 @@ export default function PinEntryScreen() {
         <Text style={styles.appName}>BizWise</Text>
       </View>
 
-      {/* Content */}
       <View style={styles.content}>
         <Text style={styles.title}>Enter PIN</Text>
-        <Text style={styles.subtitle}>
-          Welcome back, {userName}
-        </Text>
+        <Text style={styles.subtitle}>Welcome back, {userName}</Text>
 
-        <PinDots length={pin.length} error={!!error} verifying={isVerifying} />
+        <PinDots length={pin.length} error={!!error} />
 
         {error ? (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error}</Text>
-            <TouchableOpacity onPress={handleClearError}>
-              <Text style={styles.errorDismiss}>Tap to dismiss</Text>
-            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -321,9 +262,6 @@ const styles = StyleSheet.create({
     borderColor: COLORS.error,
     backgroundColor: COLORS.error,
   },
-  pinDotVerifying: {
-    opacity: 0.6,
-  },
   errorText: {
     color: COLORS.error,
     fontSize: 14,
@@ -336,12 +274,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 20,
     alignItems: "center",
-  },
-  errorDismiss: {
-    color: COLORS.error,
-    fontSize: 12,
-    marginTop: 4,
-    textDecorationLine: "underline",
   },
   numberPad: {
     marginTop: 40,
@@ -384,17 +316,5 @@ const styles = StyleSheet.create({
   },
   numberTextDisabled: {
     opacity: 0.5,
-  },
-  offlineBanner: {
-    backgroundColor: COLORS.error,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  offlineBannerText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: "600",
   },
 });

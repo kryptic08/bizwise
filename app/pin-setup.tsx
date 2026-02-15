@@ -33,9 +33,10 @@ const PinDots = React.memo(({ length }: { length: number }) => (
   </View>
 ));
 
-const NumberPad = React.memo(({ onNumberPress, onDelete }: { 
+const NumberPad = React.memo(({ onNumberPress, onDelete, disabled }: { 
   onNumberPress: (num: string) => void; 
   onDelete: () => void;
+  disabled: boolean;
 }) => {
   const numbers = [
     ["1", "2", "3"],
@@ -56,22 +57,24 @@ const NumberPad = React.memo(({ onNumberPress, onDelete }: {
               return (
                 <TouchableOpacity
                   key={colIndex}
-                  style={styles.numberButton}
+                  style={[styles.numberButton, disabled && styles.numberButtonDisabled]}
                   onPress={onDelete}
                   activeOpacity={0.7}
+                  disabled={disabled}
                 >
-                  <Text style={styles.deleteText}>{num}</Text>
+                  <Text style={[styles.deleteText, disabled && styles.numberTextDisabled]}>{num}</Text>
                 </TouchableOpacity>
               );
             }
             return (
               <TouchableOpacity
                 key={colIndex}
-                style={styles.numberButton}
+                style={[styles.numberButton, disabled && styles.numberButtonDisabled]}
                 onPress={() => onNumberPress(num)}
                 activeOpacity={0.7}
+                disabled={disabled}
               >
-                <Text style={styles.numberText}>{num}</Text>
+                <Text style={[styles.numberText, disabled && styles.numberTextDisabled]}>{num}</Text>
               </TouchableOpacity>
             );
           })}
@@ -86,80 +89,27 @@ export default function PinSetupScreen() {
   const { user, login } = useAuth();
   const [step, setStep] = useState<"enter" | "confirm">("enter");
   const [pin, setPin] = useState("");
+  const [firstPin, setFirstPin] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const setPinMutation = useMutation(api.users.setPin);
-
-  // Single ref to track all values
-  const stateRef = useRef({
-    user: user,
-    pin: "",
-    firstPin: "",
-    step: "enter" as "enter" | "confirm",
-    isSaving: false,
-  });
-
-  // Keep ref in sync
+  
+  const stateRef = useRef({ pin, step, firstPin, isSaving, user });
+  
   useEffect(() => {
-    stateRef.current.user = user;
-  }, [user]);
+    stateRef.current = { pin, step, firstPin, isSaving, user };
+  }, [pin, step, firstPin, isSaving, user]);
 
-  useEffect(() => {
-    stateRef.current.pin = pin;
-  }, [pin]);
-
-  useEffect(() => {
-    stateRef.current.step = step;
-  }, [step]);
-
-  useEffect(() => {
-    stateRef.current.isSaving = isSaving;
-  }, [isSaving]);
-
-  // Memoize values - only recompute when step changes
-  const stepData = useMemo(() => ({
-    title: step === "enter" ? "Create PIN" : "Confirm PIN",
-    subtitle: step === "enter"
-      ? "Set up a 4-digit PIN for quick access"
-      : "Enter your PIN again to confirm"
-  }), [step]);
-
-  const handleNumberPress = useCallback((num: string) => {
-    if (stateRef.current.pin.length >= 4 || stateRef.current.isSaving) return;
-    
-    const newPin = stateRef.current.pin + num;
-    setPin(newPin);
-    setError("");
-
-    if (newPin.length === 4) {
-      if (stateRef.current.step === "enter") {
-        stateRef.current.firstPin = newPin;
-        setPin("");
-        setStep("confirm");
-      } else {
-        if (newPin === stateRef.current.firstPin) {
-          savePin(newPin);
-        } else {
-          setError("PINs don't match. Try again.");
-          setPin("");
-          stateRef.current.firstPin = "";
-          setStep("enter");
-        }
-      }
-    }
-  }, []);
-
-  const handleDelete = useCallback(() => {
-    setPin((prev) => prev.slice(0, -1));
-    setError("");
-  }, []);
+  const title = useMemo(() => step === "enter" ? "Create PIN" : "Confirm PIN", [step]);
+  const subtitle = useMemo(() => step === "enter"
+    ? "Set up a 4-digit PIN for quick access"
+    : "Enter your PIN again to confirm", [step]);
 
   const savePin = useCallback(async (pinToSave: string) => {
-    const currentUser = stateRef.current.user;
-    if (stateRef.current.isSaving || !currentUser) return;
+    const { user: currentUser } = stateRef.current;
+    if (!currentUser) return;
     
     setIsSaving(true);
-    stateRef.current.isSaving = true;
     
     try {
       await setPinMutation({
@@ -176,15 +126,48 @@ export default function PinSetupScreen() {
         { text: "Continue", onPress: () => router.replace("/(tabs)") },
       ]);
     } catch (err: any) {
-      Alert.alert("Error", err.message || "Failed to set PIN");
+      const errorMsg = err?.message || "Failed to set PIN";
+      Alert.alert("Error", errorMsg);
       setPin("");
-      stateRef.current.firstPin = "";
+      setFirstPin("");
       setStep("enter");
     } finally {
       setIsSaving(false);
-      stateRef.current.isSaving = false;
     }
   }, [setPinMutation, login, router]);
+
+  const handleNumberPress = useCallback((num: string) => {
+    const { pin: currentPin, step: currentStep, firstPin: storedFirstPin, isSaving: saving } = stateRef.current;
+    if (currentPin.length >= 4 || saving) return;
+    
+    const newPin = currentPin + num;
+    setPin(newPin);
+    setError("");
+
+    if (newPin.length === 4) {
+      if (currentStep === "enter") {
+        setFirstPin(newPin);
+        setPin("");
+        setStep("confirm");
+      } else {
+        if (newPin === storedFirstPin) {
+          savePin(newPin);
+        } else {
+          setError("PINs don't match. Try again.");
+          setPin("");
+          setFirstPin("");
+          setStep("enter");
+        }
+      }
+    }
+  }, [savePin]);
+
+  const handleDelete = useCallback(() => {
+    const { isSaving: saving } = stateRef.current;
+    if (saving) return;
+    setPin((prev) => prev.slice(0, -1));
+    setError("");
+  }, []);
 
   const handleSkip = useCallback(() => {
     Alert.alert(
@@ -202,12 +185,8 @@ export default function PinSetupScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor={COLORS.primaryBlue}
-      />
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.primaryBlue} />
 
-      {/* Header */}
       <View style={styles.header}>
         <Svg width="40" height="44" viewBox="0 0 118 124" fill="none">
           <Path
@@ -221,14 +200,9 @@ export default function PinSetupScreen() {
         <Text style={styles.appName}>BizWise</Text>
       </View>
 
-      {/* Content */}
       <View style={styles.content}>
-        <Text style={styles.title}>
-          {stepData.title}
-        </Text>
-        <Text style={styles.subtitle}>
-          {stepData.subtitle}
-        </Text>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.subtitle}>{subtitle}</Text>
 
         <PinDots length={pin.length} />
 
@@ -237,6 +211,7 @@ export default function PinSetupScreen() {
         <NumberPad 
           onNumberPress={handleNumberPress} 
           onDelete={handleDelete} 
+          disabled={isSaving}
         />
 
         <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
@@ -342,5 +317,11 @@ const styles = StyleSheet.create({
     color: COLORS.textGray,
     fontSize: 16,
     fontWeight: "600",
+  },
+  numberButtonDisabled: {
+    opacity: 0.5,
+  },
+  numberTextDisabled: {
+    opacity: 0.5,
   },
 });

@@ -177,24 +177,34 @@ export default function LoginScreen() {
         }
       }
     } catch (error: any) {
-      const errorMessage = error.message || "Authentication failed";
-
-      // Show more specific error messages
-      if (errorMessage.includes("Invalid email or password")) {
-        Alert.alert(
-          "Login Failed",
-          "The email or password you entered is incorrect. Please try again.",
-        );
-      } else if (errorMessage.includes("already exists")) {
-        Alert.alert(
-          "Sign Up Failed",
-          "An account with this email already exists. Please sign in instead.",
-        );
-      } else {
-        Alert.alert("Error", errorMessage);
-      }
-    } finally {
       setIsLoading(false);
+      
+      // Extract a clean error message - handle various error formats from Convex
+      let errorMessage = "Authentication failed. Please try again.";
+      
+      if (error) {
+        // Convex errors often come as: Error: [Code] Message
+        const errorStr = String(error);
+        
+        // Check for common error patterns
+        if (errorStr.includes("Invalid email or password")) {
+          errorMessage = "The email or password you entered is incorrect.";
+        } else if (errorStr.includes("already exists")) {
+          errorMessage = "An account with this email already exists.";
+        } else if (errorStr.includes("rate limit")) {
+          errorMessage = "Too many attempts. Please try again later.";
+        } else if (errorStr.includes("network") || errorStr.includes("fetch")) {
+          errorMessage = "Network error. Please check your connection.";
+        } else {
+          // Try to extract a cleaner message from the error
+          const match = errorStr.match(/Error.*?]\s*(.+)/);
+          if (match && match[1] && !match[1].includes("Request ID")) {
+            errorMessage = match[1].trim();
+          }
+        }
+      }
+      
+      Alert.alert("Error", errorMessage);
     }
   };
 
