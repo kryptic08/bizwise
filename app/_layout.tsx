@@ -1,7 +1,7 @@
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import "react-native-reanimated";
@@ -28,6 +28,14 @@ function RootLayoutNav() {
   const router = useRouter();
   const segments = useSegments();
   const isNavigating = useRef(false);
+  const [isAppReady, setIsAppReady] = useState(false);
+
+  useEffect(() => {
+    if (!isLoading) {
+      const timer = setTimeout(() => setIsAppReady(true), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isLoading]);
 
   useEffect(() => {
     if (user && !isPinLocked && !isLoading) {
@@ -36,7 +44,7 @@ function RootLayoutNav() {
   }, [user, isPinLocked, isLoading]);
 
   useEffect(() => {
-    if (isLoading || isNavigating.current) return;
+    if (isLoading || !isAppReady || isNavigating.current) return;
 
     const screen = segments[0] as string;
     const isPinScreen = screen === "pin-entry" || screen === "pin-setup";
@@ -48,17 +56,22 @@ function RootLayoutNav() {
         isNavigating.current = true;
         router.replace("/welcome");
       }
+    } else if (isPinLocked) {
+      if (screen !== "welcome") {
+        isNavigating.current = true;
+        router.replace("/welcome");
+      }
     } else if (screen === "welcome" || screen === "login" || screen === "onboarding" || screen === "reset") {
-      if (user && !isPinLocked && user.pin) {
+      if (user && user.pin) {
         isNavigating.current = true;
         router.replace("/(tabs)");
       }
     }
 
-    setTimeout(() => { isNavigating.current = false; }, 100);
-  }, [user, isLoading, isPinLocked, segments]);
+    setTimeout(() => { isNavigating.current = false; }, 500);
+  }, [user, isLoading, isPinLocked, segments, isAppReady]);
 
-  if (isLoading) {
+  if (isLoading || !isAppReady) {
     return (
       <View style={{ flex: 1, backgroundColor: "#007AFF", justifyContent: "center", alignItems: "center" }}>
         <StatusBar style="light" />
