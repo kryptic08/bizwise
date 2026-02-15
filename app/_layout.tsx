@@ -50,6 +50,13 @@ function RootLayoutNav() {
       return;
     }
 
+<<<<<<< HEAD
+=======
+    if (isLoading || showWelcome || isNavigating.current) {
+      return;
+    }
+
+>>>>>>> 6c98226e4164984682e8b5f60ba194b24a355d07
     const currentScreen = segments[0];
     const isOnPinScreen = currentScreen === "pin-entry" || currentScreen === "pin-setup";
 
@@ -77,6 +84,14 @@ function RootLayoutNav() {
       isNavigating.current = true;
       routerRef.current.replace("/(tabs)");
     }
+<<<<<<< HEAD
+=======
+
+    setTimeout(() => {
+      isNavigating.current = false;
+    }, 100);
+  }, [user, isLoading, isPinLocked, segments, showWelcome]);
+>>>>>>> 6c98226e4164984682e8b5f60ba194b24a355d07
 
     setTimeout(() => {
       isNavigating.current = false;
