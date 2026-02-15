@@ -6,7 +6,6 @@ import React, {
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from "react";
 import { api } from "../../convex/_generated/api";
@@ -75,36 +74,23 @@ const MutationQueueContext = createContext<MutationQueueContextType | undefined>
   undefined
 );
 
-interface MutationQueueProviderProps {
+export function MutationQueueProvider({
+  children,
+}: {
   children: React.ReactNode;
-  userId?: string;
-}
-
-export function MutationQueueProvider({ children, userId }: MutationQueueProviderProps) {
+}) {
   const [queue, setQueue] = useState<QueuedMutation[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const { isOnline } = useOffline();
   const queryClient = useQueryClient();
-  const prevUserIdRef = useRef<string | undefined>(userId);
 
   const createSale = useMutation(api.sales.createSale);
   const addExpenseGroup = useMutation(api.expenses.addExpenseGroup);
 
-  // Clear queue when user changes (login/logout)
-  useEffect(() => {
-    if (prevUserIdRef.current !== userId && userId !== undefined) {
-      setQueue([]);
-      AsyncStorage.removeItem(QUEUE_STORAGE_KEY).catch(console.error);
-    }
-    prevUserIdRef.current = userId;
-  }, [userId]);
-
-  // Load queue from storage on mount
   useEffect(() => {
     loadQueue();
   }, []);
 
-  // Auto-sync when coming online
   useEffect(() => {
     if (isOnline && !isProcessing) {
       const pendingItems = queue.filter(
@@ -161,7 +147,6 @@ export function MutationQueueProvider({ children, userId }: MutationQueueProvide
     const newQueue = [...queue, mutation];
     await saveQueue(newQueue);
 
-    // Try to sync immediately if online
     if (isOnline) {
       syncNow();
     }
@@ -228,10 +213,7 @@ export function MutationQueueProvider({ children, userId }: MutationQueueProvide
         });
       }
 
-      // Mark as completed
       await updateMutationStatus(mutation.id, "completed");
-      
-      // Invalidate queries to refetch from server
       await queryClient.invalidateQueries();
       
       return true;
@@ -259,19 +241,16 @@ export function MutationQueueProvider({ children, userId }: MutationQueueProvide
       );
 
       for (const mutation of pendingItems) {
-        // Skip if too many retries
         if (mutation.retryCount >= 3) {
           continue;
         }
 
         const success = await executeMutation(mutation);
         if (!success) {
-          // Continue with next item even if one fails
           console.warn(`Failed to sync mutation ${mutation.id}, will retry later`);
         }
       }
 
-      // Clean up completed items after a longer delay to allow queries to refetch
       setTimeout(async () => {
         const newQueue = queue.filter((item) => item.status !== "completed");
         if (newQueue.length !== queue.length) {
@@ -287,7 +266,7 @@ export function MutationQueueProvider({ children, userId }: MutationQueueProvide
 
   const getLocalTransactions = useCallback(() => {
     return queue.filter(
-      (item) => item.status === "pending" || item.status === "syncing" || item.status === "error" || item.status === "completed"
+      (item) => item.status !== "completed"
     );
   }, [queue]);
 

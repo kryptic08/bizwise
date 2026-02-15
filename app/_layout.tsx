@@ -12,7 +12,6 @@ export const unstable_settings = {
   initialRouteName: "welcome",
 };
 
-// Create custom theme with transparent tab bar background
 const CustomLightTheme = {
   ...DefaultTheme,
   colors: {
@@ -28,25 +27,20 @@ function RootLayoutNav() {
   const router = useRouter();
   const segments = useSegments();
   const navigationInProgress = useRef(false);
-  const isOnPinScreen = useRef(false);
 
   useEffect(() => {
-    // Show welcome screen for 2 seconds on app launch
     const timer = setTimeout(() => {
       setShowWelcome(false);
-    }, 100); // Small delay to ensure welcome screen shows first
-
+    }, 100);
     return () => clearTimeout(timer);
   }, []);
 
-  // Initialize notifications when user is logged in
   useEffect(() => {
     if (user && !isPinLocked && !isLoading) {
       initializeNotifications().catch(console.error);
     }
   }, [user, isPinLocked, isLoading]);
 
-  // Handle auth and PIN lock routing
   useEffect(() => {
     if (!isLoading && !showWelcome && !navigationInProgress.current) {
       const inAuthGroup = segments[0] === "(tabs)";
@@ -59,36 +53,25 @@ function RootLayoutNav() {
       const onPinSetupScreen = segments[0] === "pin-setup";
       const onPinScreen = onPinEntryScreen || onPinSetupScreen;
 
-      // Track if user is actively entering PIN
-      if (onPinEntryScreen || onPinSetupScreen) {
-        isOnPinScreen.current = true;
-      } else {
-        isOnPinScreen.current = false;
-      }
-
       if (!user && inAuthGroup) {
-        // User is NOT logged in but trying to access protected screens - redirect to welcome
         navigationInProgress.current = true;
         router.replace("/welcome");
         setTimeout(() => {
           navigationInProgress.current = false;
         }, 100);
       } else if (user && isPinLocked && !onPinEntryScreen) {
-        // User is logged in, has PIN, and app is locked - show PIN entry
         navigationInProgress.current = true;
         router.replace("/pin-entry");
         setTimeout(() => {
           navigationInProgress.current = false;
         }, 100);
       } else if (user && !user.pin && !onPinSetupScreen) {
-        // User is logged in but has no PIN - prompt to set up PIN
         navigationInProgress.current = true;
         router.replace("/pin-setup");
         setTimeout(() => {
           navigationInProgress.current = false;
         }, 100);
       } else if (user && !isPinLocked && onAuthScreen && !onPinScreen) {
-        // User is logged in, has PIN, and on an auth screen - go to main app
         navigationInProgress.current = true;
         router.replace("/(tabs)");
         setTimeout(() => {
@@ -144,11 +127,9 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
-  const { user } = useAuth();
-  
   return (
     <AuthProvider>
-      <ConvexClientProvider userId={user?.userId}>
+      <ConvexClientProvider>
         <RootLayoutNav />
       </ConvexClientProvider>
     </AuthProvider>
