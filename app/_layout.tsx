@@ -29,6 +29,7 @@ function RootLayoutNav() {
   const segments = useSegments();
   const isNavigating = useRef(false);
   const [isAppReady, setIsAppReady] = useState(false);
+  const [destination, setDestination] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoading) {
@@ -44,34 +45,52 @@ function RootLayoutNav() {
   }, [user, isPinLocked, isLoading]);
 
   useEffect(() => {
-    if (isLoading || !isAppReady || isNavigating.current) return;
+    if (isLoading || !isAppReady || isNavigating.current || destination) return;
 
     const screen = segments[0] as string;
-    const isPinScreen = screen === "pin-entry" || screen === "pin-setup";
 
-    if (isPinScreen) return;
+    if (isPinLocked && screen !== "pin-entry" && screen !== "pin-setup") {
+      isNavigating.current = true;
+      setDestination("pin-entry");
+      return;
+    }
 
     if (!user) {
       if (screen !== "welcome" && screen !== "login" && screen !== "onboarding" && screen !== "reset") {
         isNavigating.current = true;
-        router.replace("/welcome");
+        setDestination("welcome");
       }
-    } else if (isPinLocked) {
-      if (screen !== "pin-entry") {
+      return;
+    }
+
+    if (!user.pin) {
+      if (screen !== "pin-setup") {
         isNavigating.current = true;
-        router.replace("/pin-entry");
+        setDestination("pin-setup");
       }
-    } else if (screen === "welcome" || screen === "login" || screen === "onboarding" || screen === "reset") {
-      if (user && user.pin) {
+      return;
+    }
+
+    if (!isPinLocked && screen !== "pin-entry" && screen !== "pin-setup" && screen !== "(tabs)") {
+      if (screen === "welcome" || screen === "login" || screen === "onboarding" || screen === "reset" || screen === "index") {
         isNavigating.current = true;
-        router.replace("/(tabs)");
+        setDestination("tabs");
       }
+      return;
     }
 
     setTimeout(() => { isNavigating.current = false; }, 500);
-  }, [user, isLoading, isPinLocked, segments, isAppReady]);
+  }, [user, isLoading, isPinLocked, segments, isAppReady, destination]);
 
-  if (isLoading || !isAppReady) {
+  useEffect(() => {
+    if (!destination) return;
+    
+    if (destination === "pin-entry" || destination === "pin-setup" || destination === "tabs" || destination === "welcome") {
+      router.replace(`/${destination === "tabs" ? "(tabs)" : destination}`);
+    }
+  }, [destination]);
+
+  if (isLoading || !isAppReady || !destination) {
     return (
       <View style={{ flex: 1, backgroundColor: "#007AFF", justifyContent: "center", alignItems: "center" }}>
         <StatusBar style="light" />
