@@ -1,6 +1,6 @@
 import { useMutation } from "convex/react";
 import { useRouter } from "expo-router";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   StatusBar,
@@ -86,10 +86,34 @@ export default function PinSetupScreen() {
   const { user, login } = useAuth();
   const [step, setStep] = useState<"enter" | "confirm">("enter");
   const [pin, setPin] = useState("");
-  const [firstPin, setFirstPin] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const setPinMutation = useMutation(api.users.setPin);
+
+  // Refs to avoid re-renders
+  const pinRef = useRef("");
+  const firstPinRef = useRef("");
+  const stepRef = useRef("enter");
+  const isSavingRef = useRef(false);
+  const userRef = useRef(user);
+  const hasMounted = useRef(false);
+
+  // Update refs when values change
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    pinRef.current = pin;
+  }, [pin]);
+
+  useEffect(() => {
+    stepRef.current = step;
+  }, [step]);
+
+  useEffect(() => {
+    isSavingRef.current = isSaving;
+  }, [isSaving]);
 
   // Memoize values to prevent re-renders
   const stepData = useMemo(() => ({
@@ -100,29 +124,29 @@ export default function PinSetupScreen() {
   }), [step]);
 
   const handleNumberPress = useCallback((num: string) => {
-    if (pin.length >= 4 || isSaving) return;
+    if (pinRef.current.length >= 4 || isSavingRef.current) return;
     
-    const newPin = pin + num;
+    const newPin = pinRef.current + num;
     setPin(newPin);
     setError("");
 
     if (newPin.length === 4) {
-      if (step === "enter") {
-        setFirstPin(newPin);
+      if (stepRef.current === "enter") {
+        firstPinRef.current = newPin;
         setPin("");
         setStep("confirm");
       } else {
-        if (newPin === firstPin) {
+        if (newPin === firstPinRef.current) {
           savePin(newPin);
         } else {
           setError("PINs don't match. Try again.");
           setPin("");
-          setFirstPin("");
+          firstPinRef.current = "";
           setStep("enter");
         }
       }
     }
-  }, [pin, step, firstPin, isSaving]);
+  }, []);
 
   const handleDelete = useCallback(() => {
     setPin((prev) => prev.slice(0, -1));
@@ -130,17 +154,18 @@ export default function PinSetupScreen() {
   }, []);
 
   const savePin = useCallback(async (pinToSave: string) => {
-    if (isSaving || !user) return;
+    const currentUser = userRef.current;
+    if (isSavingRef.current || !currentUser) return;
     
     setIsSaving(true);
     try {
       await setPinMutation({
-        userId: user.userId,
+        userId: currentUser.userId,
         pin: pinToSave,
       });
 
       await login({
-        ...user,
+        ...currentUser,
         pin: pinToSave,
       });
 
@@ -150,12 +175,12 @@ export default function PinSetupScreen() {
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to set PIN");
       setPin("");
-      setFirstPin("");
+      firstPinRef.current = "";
       setStep("enter");
     } finally {
       setIsSaving(false);
     }
-  }, [isSaving, user, setPinMutation, login, router]);
+  }, [setPinMutation, login, router]);
 
   const handleSkip = useCallback(() => {
     Alert.alert(

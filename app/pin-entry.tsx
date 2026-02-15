@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   StatusBar,
@@ -94,29 +94,49 @@ export default function PinEntryScreen() {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
-
-  // Memoize user name to prevent re-renders
+  
+  // Refs to avoid re-renders
+  const userRef = useRef(user);
+  const isVerifyingRef = useRef(false);
+  const pinRef = useRef("");
+  const hasMounted = useRef(false);
+  
+  // Memoize userName to prevent subtitle re-render
   const userName = useMemo(() => user?.name || "User", [user?.name]);
-
+  
+  // Update refs when values change
   useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+  
+  useEffect(() => {
+    pinRef.current = pin;
+  }, [pin]);
+
+  // Initial redirect check - only runs once on mount
+  useEffect(() => {
+    if (hasMounted.current) return;
+    hasMounted.current = true;
+    
     if (!user || !user.pin) {
       router.replace("/login");
     }
-  }, [user, router]);
+  }, []);
 
   const handleNumberPress = useCallback((num: string) => {
-    if (isVerifying || pin.length >= 4) return;
+    if (isVerifyingRef.current || pinRef.current.length >= 4) return;
     
-    const newPin = pin + num;
+    const newPin = pinRef.current + num;
     setPin(newPin);
     setError("");
 
     if (newPin.length === 4) {
+      isVerifyingRef.current = true;
       setTimeout(() => {
         verifyPin(newPin);
       }, 100);
     }
-  }, [isVerifying, pin, user]);
+  }, []);
 
   const handleDelete = useCallback(() => {
     setPin((prev) => prev.slice(0, -1));
@@ -124,11 +144,12 @@ export default function PinEntryScreen() {
   }, []);
 
   const verifyPin = useCallback(async (pinToVerify: string) => {
-    if (isVerifying) return;
+    const currentUser = userRef.current;
+    if (!currentUser || !currentUser.pin) return;
     
     setIsVerifying(true);
     try {
-      if (user?.pin === pinToVerify) {
+      if (currentUser.pin === pinToVerify) {
         unlockWithPin();
         router.replace("/(tabs)");
       } else {
@@ -139,9 +160,10 @@ export default function PinEntryScreen() {
       setError("Incorrect PIN");
       setPin("");
     } finally {
+      isVerifyingRef.current = false;
       setIsVerifying(false);
     }
-  }, [isVerifying, user, unlockWithPin, router]);
+  }, [unlockWithPin, router]);
 
   const handleForgotPin = useCallback(() => {
     Alert.alert(

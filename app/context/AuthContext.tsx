@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { Id } from "../../convex/_generated/dataModel";
 
 interface User {
@@ -19,12 +19,14 @@ interface AuthContextType {
   logout: () => Promise<void>;
   unlockWithPin: () => void;
   lockWithPin: () => void;
+  clearData: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const USER_STORAGE_KEY = "bizwise_user";
 const PIN_LOCK_KEY = "bizwise_pin_locked";
+const CLEAR_DATA_EVENT = "bizwise_clear_data";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -55,8 +57,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadUser();
   }, []);
 
+  const clearData = useCallback(async () => {
+    // Dispatch event for components to clear their data
+    const event = new Event(CLEAR_DATA_EVENT);
+    window.dispatchEvent(event);
+    
+    // Clear AsyncStorage
+    await AsyncStorage.removeItem("bizwise_mutation_queue");
+    await AsyncStorage.removeItem("bizwise_query_cache");
+  }, []);
+
   const login = async (userData: User) => {
     try {
+      // Clear local data first
+      await clearData();
+      
       await AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userData));
       setUser(userData);
 
@@ -72,6 +87,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     try {
+      // Clear local data
+      await clearData();
+      
       await AsyncStorage.removeItem(USER_STORAGE_KEY);
       await AsyncStorage.removeItem(PIN_LOCK_KEY);
       setUser(null);
@@ -102,6 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         unlockWithPin,
         lockWithPin,
+        clearData,
       }}
     >
       {children}

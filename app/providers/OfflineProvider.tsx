@@ -72,6 +72,15 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
       }
     });
 
+    // Listen for clear data event from AuthContext
+    const handleClearData = async () => {
+      await queryClient.clear();
+      await AsyncStorage.removeItem("bizwise_last_sync");
+      setLastSyncTime(null);
+    };
+
+    window.addEventListener("bizwise_clear_data", handleClearData);
+
     // Monitor network status
     const unsubscribe = NetInfo.addEventListener((state) => {
       const online =
@@ -98,8 +107,9 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
 
     return () => {
       unsubscribe();
+      window.removeEventListener("bizwise_clear_data", handleClearData);
     };
-  }, []);
+  }, [queryClient]);
 
   // Trigger background refetch when coming back online
   useEffect(() => {

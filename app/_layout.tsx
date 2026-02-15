@@ -28,6 +28,7 @@ function RootLayoutNav() {
   const router = useRouter();
   const segments = useSegments();
   const navigationInProgress = useRef(false);
+  const isOnPinScreen = useRef(false);
 
   useEffect(() => {
     // Show welcome screen for 2 seconds on app launch
@@ -57,6 +58,13 @@ function RootLayoutNav() {
       const onPinEntryScreen = segments[0] === "pin-entry";
       const onPinSetupScreen = segments[0] === "pin-setup";
       const onPinScreen = onPinEntryScreen || onPinSetupScreen;
+
+      // Track if user is actively entering PIN
+      if (onPinEntryScreen || onPinSetupScreen) {
+        isOnPinScreen.current = true;
+      } else {
+        isOnPinScreen.current = false;
+      }
 
       if (!user && inAuthGroup) {
         // User is NOT logged in but trying to access protected screens - redirect to welcome
