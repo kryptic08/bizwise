@@ -144,11 +144,13 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
+  const { user } = useAuth();
+  
   return (
-    <ConvexClientProvider>
-      <AuthProvider>
+    <AuthProvider>
+      <ConvexClientProvider userId={user?.userId}>
         <RootLayoutNav />
-      </AuthProvider>
-    </ConvexClientProvider>
+      </ConvexClientProvider>
+    </AuthProvider>
   );
 }

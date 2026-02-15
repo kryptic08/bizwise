@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { api } from "../../convex/_generated/api";
@@ -65,7 +66,6 @@ interface MutationQueueContextType {
   syncNow: () => Promise<void>;
   getLocalTransactions: () => QueuedMutation[];
   isSyncing: boolean;
-  clearCache: () => Promise<void>;
 }
 
 const QUEUE_STORAGE_KEY = "bizwise_mutation_queue";
@@ -75,37 +75,34 @@ const MutationQueueContext = createContext<MutationQueueContextType | undefined>
   undefined
 );
 
-export function MutationQueueProvider({
-  children,
-}: {
+interface MutationQueueProviderProps {
   children: React.ReactNode;
-}) {
+  userId?: string;
+}
+
+export function MutationQueueProvider({ children, userId }: MutationQueueProviderProps) {
   const [queue, setQueue] = useState<QueuedMutation[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const { isOnline } = useOffline();
   const queryClient = useQueryClient();
+  const prevUserIdRef = useRef<string | undefined>(userId);
 
   const createSale = useMutation(api.sales.createSale);
   const addExpenseGroup = useMutation(api.expenses.addExpenseGroup);
+
+  // Clear queue when user changes (login/logout)
+  useEffect(() => {
+    if (prevUserIdRef.current !== userId && userId !== undefined) {
+      setQueue([]);
+      AsyncStorage.removeItem(QUEUE_STORAGE_KEY).catch(console.error);
+    }
+    prevUserIdRef.current = userId;
+  }, [userId]);
 
   // Load queue from storage on mount
   useEffect(() => {
     loadQueue();
   }, []);
-
-  // Listen for clear data event from AuthContext
-  useEffect(() => {
-    const handleClearData = async () => {
-      await queryClient.clear();
-      await AsyncStorage.removeItem(QUEUE_STORAGE_KEY);
-      setQueue([]);
-    };
-
-    window.addEventListener("bizwise_clear_data", handleClearData);
-    return () => {
-      window.removeEventListener("bizwise_clear_data", handleClearData);
-    };
-  }, [queryClient]);
 
   // Auto-sync when coming online
   useEffect(() => {
@@ -294,12 +291,6 @@ export function MutationQueueProvider({
     );
   }, [queue]);
 
-  const clearCache = useCallback(async () => {
-    await queryClient.clear();
-    await AsyncStorage.removeItem(QUEUE_STORAGE_KEY);
-    setQueue([]);
-  }, [queryClient]);
-
   const pendingCount = queue.filter((item) => item.status === "pending").length;
   const syncingCount = queue.filter((item) => item.status === "syncing").length;
   const errorCount = queue.filter((item) => item.status === "error").length;
@@ -317,7 +308,6 @@ export function MutationQueueProvider({
         syncNow,
         getLocalTransactions,
         isSyncing: isProcessing,
-        clearCache,
       }}
     >
       {children}

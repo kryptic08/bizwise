@@ -1,10 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import NetInfo from "@react-native-community/netinfo";
 import {
   QueryClient,
   QueryClientProvider,
-  useQuery,
-  UseQueryOptions,
+  useQueryClient,
 } from "@tanstack/react-query";
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
@@ -13,8 +11,10 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
+import NetInfo from "@react-native-community/netinfo";
 
 interface OfflineContextType {
   isOnline: boolean;
@@ -54,15 +54,27 @@ const asyncStoragePersister = createAsyncStoragePersister({
 
 interface OfflineProviderProps {
   children: React.ReactNode;
+  userId?: string;
 }
 
-export function OfflineProvider({ children }: OfflineProviderProps) {
+export function OfflineProvider({ children, userId }: OfflineProviderProps) {
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error">(
     "idle",
   );
+  
+  const prevUserIdRef = useRef<string | undefined>(userId);
+
+  useEffect(() => {
+    // Clear query cache when user changes (login/logout)
+    if (prevUserIdRef.current !== userId && userId !== undefined) {
+      queryClient.clear();
+      AsyncStorage.removeItem("bizwise_query_cache").catch(console.error);
+    }
+    prevUserIdRef.current = userId;
+  }, [userId]);
 
   useEffect(() => {
     // Load last sync time
@@ -71,15 +83,6 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
         setLastSyncTime(new Date(parseInt(timestamp)));
       }
     });
-
-    // Listen for clear data event from AuthContext
-    const handleClearData = async () => {
-      await queryClient.clear();
-      await AsyncStorage.removeItem("bizwise_last_sync");
-      setLastSyncTime(null);
-    };
-
-    window.addEventListener("bizwise_clear_data", handleClearData);
 
     // Monitor network status
     const unsubscribe = NetInfo.addEventListener((state) => {
@@ -107,9 +110,8 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
 
     return () => {
       unsubscribe();
-      window.removeEventListener("bizwise_clear_data", handleClearData);
     };
-  }, [queryClient]);
+  }, []);
 
   // Trigger background refetch when coming back online
   useEffect(() => {
@@ -117,7 +119,6 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
       setIsSyncing(true);
       setSyncStatus("syncing");
 
-      // Invalidate and refetch all active queries
       queryClient
         .invalidateQueries()
         .then(() => {
@@ -154,22 +155,8 @@ export function OfflineProvider({ children }: OfflineProviderProps) {
   );
 }
 
-// Hook for offline-aware queries
-export function useOfflineQuery<T>(
-  queryKey: string[],
-  queryFn: () => Promise<T>,
-  options?: Omit<UseQueryOptions<T>, "queryKey" | "queryFn">,
-) {
-  const { isOnline } = useOffline();
-
-  return useQuery({
-    queryKey,
-    queryFn,
-    ...options,
-    // Always enabled, will use cached data if offline
-    enabled: options?.enabled !== false,
-  });
-}
+// Export queryClient for external use
+export { queryClient };
 
 // Utility to format last sync time
 export function formatLastSync(date: Date | null): string {
