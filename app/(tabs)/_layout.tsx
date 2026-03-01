@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { List, Plus, ShoppingCart, User } from "lucide-react-native";
+import { BookOpen, List, Plus, User } from "lucide-react-native";
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
@@ -142,8 +142,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="counter"
         options={{
-          title: "Counter",
-          tabBarIcon: ({ color }) => <ShoppingCart size={24} color={color} />,
+          title: "Sales",
+          tabBarIcon: ({ color }) => <BookOpen size={24} color={color} />,
         }}
       />
       <Tabs.Screen

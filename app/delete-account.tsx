@@ -109,7 +109,7 @@ export default function DeleteAccountScreen() {
         <View style={styles.bulletPoint}>
           <Text style={styles.bullet}>•</Text>
           <Text style={styles.bulletText}>
-            All your expenses, income and associated transactions will be
+            All your expenses, sales and associated transactions will be
             eliminated.
           </Text>
         </View>

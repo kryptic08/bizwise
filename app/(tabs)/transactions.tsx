@@ -1,35 +1,32 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
+import DateTimePicker, {
+  DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import { useRouter } from "expo-router";
 import {
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
+  Calendar,
   ChevronDown,
-  Cloud,
-  CloudOff,
   Coins,
-  Loader2,
-  Utensils,
-  XCircle,
+  ShoppingBag,
+  X,
 } from "lucide-react-native";
 import React, { useMemo, useState } from "react";
 import {
-  Animated,
   FlatList,
+  Modal,
+  Platform,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { useAuth } from "../context/AuthContext";
 import { OfflineIndicator } from "../components/OfflineIndicator";
 import { SyncBadge } from "../components/SyncBadge";
-import {
-  QueuedMutation,
-  useMutationQueue,
-} from "../providers/MutationQueueProvider";
-import { useOffline } from "../providers/OfflineProvider";
+import { useAuth } from "../context/AuthContext";
 import {
   useFinancialSummary,
   useTransactions,
@@ -77,8 +74,62 @@ interface Transaction {
 export default function TransactionScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const { isOnline } = useOffline();
-  const { getLocalTransactions, pendingCount, errorCount, isSyncing, retryMutation } = useMutationQueue();
+
+  // Date filter state - default to today
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const [startDate, setStartDate] = useState<Date>(today); // Default to today
+  const [endDate, setEndDate] = useState<Date>(tomorrow);
+  const [showDateFilter, setShowDateFilter] = useState(false);
+  // Which date is currently being picked: null = none, "start" = from, "end" = to
+  const [activePicker, setActivePicker] = useState<"start" | "end" | null>(
+    null,
+  );
+
+  // Helper function to parse transaction date
+  // Handles backend format: "Feb 25, 2026" → local midnight for correct comparison
+  const parseTransactionDate = (dateStr: string): Date | null => {
+    try {
+      // Handle "Mon DD, YYYY" format from backend (e.g. "Feb 25, 2026")
+      const monthNames: Record<string, number> = {
+        Jan: 0,
+        Feb: 1,
+        Mar: 2,
+        Apr: 3,
+        May: 4,
+        Jun: 5,
+        Jul: 6,
+        Aug: 7,
+        Sep: 8,
+        Oct: 9,
+        Nov: 10,
+        Dec: 11,
+      };
+      const named = dateStr.match(/^(\w{3})\s+(\d{1,2}),\s+(\d{4})$/);
+      if (named) {
+        const month = monthNames[named[1]];
+        if (month !== undefined) {
+          return new Date(parseInt(named[3]), month, parseInt(named[2]));
+        }
+      }
+      // Fallback: try native parse
+      const parsed = new Date(dateStr);
+      if (!isNaN(parsed.getTime())) {
+        // Strip time so comparison is date-only
+        return new Date(
+          parsed.getFullYear(),
+          parsed.getMonth(),
+          parsed.getDate(),
+        );
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
 
   // Pagination state
   const [cursor, setCursor] = useState<number | undefined>(undefined);
@@ -87,65 +138,77 @@ export default function TransactionScreen() {
 
   // Fetch transactions with offline caching
   const { data: paginatedData } = useTransactions(user?.userId, 20, cursor);
-  
+
   // Fetch financial summary with offline caching
   const { data: financialSummary } = useFinancialSummary(user?.userId);
 
-  // Get local pending transactions
-  const localTransactions = useMemo(() => {
-    const pending = getLocalTransactions();
-    return pending.map((mutation: QueuedMutation) => {
-      if (mutation.type === "sale") {
-        const data = mutation.data as any;
-        const totalAmount = data.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
-        return {
-          id: mutation.id,
-          transactionId: mutation.tempId,
-          date: new Date(mutation.timestamp).toLocaleDateString(),
-          time: new Date(mutation.timestamp).toLocaleTimeString(),
-          items: `${data.items.length} item${data.items.length > 1 ? 's' : ''}`,
-          amount: `₱${totalAmount.toFixed(2)}`,
-          type: "income" as TransactionType,
-          createdAt: mutation.timestamp,
-          sortKey: mutation.timestamp,
-          itemDetails: data.items.map((item: any) => ({
-            name: item.productName,
-            category: item.category,
-            pricePerPiece: `₱${item.price.toFixed(2)}`,
-            pieces: item.quantity,
-            amount: `₱${(item.price * item.quantity).toFixed(2)}`,
-          })),
-          isPending: true,
-          mutationStatus: mutation.status,
-          errorMessage: mutation.errorMessage,
-        };
-      } else {
-        const data = mutation.data as any;
-        const totalAmount = data.items.reduce((sum: number, item: any) => sum + item.total, 0);
-        return {
-          id: mutation.id,
-          transactionId: mutation.tempId,
-          date: new Date(mutation.timestamp).toLocaleDateString(),
-          time: new Date(mutation.timestamp).toLocaleTimeString(),
-          items: `${data.items.length} item${data.items.length > 1 ? 's' : ''}`,
-          amount: `₱${totalAmount.toFixed(2)}`,
-          type: "expense" as TransactionType,
-          createdAt: mutation.timestamp,
-          sortKey: mutation.timestamp,
-          itemDetails: data.items.map((item: any) => ({
-            name: item.title,
-            category: item.category,
-            pricePerPiece: `₱${item.amount.toFixed(2)}`,
-            pieces: item.quantity,
-            amount: `₱${item.total.toFixed(2)}`,
-          })),
-          isPending: true,
-          mutationStatus: mutation.status,
-          errorMessage: mutation.errorMessage,
-        };
+  // Calculate filtered totals based on date range
+  const filteredTotals = useMemo(() => {
+    let salesTotal = 0;
+    let expenseTotal = 0;
+
+    allTransactions.forEach((t) => {
+      const txDate = parseTransactionDate(t.date);
+      if (txDate && txDate >= startDate && txDate < endDate) {
+        const amount = parseFloat(t.amount.replace(/[^0-9.-]+/g, ""));
+        if (t.type === "income") {
+          salesTotal += amount;
+        } else {
+          expenseTotal += amount;
+        }
       }
     });
-  }, [getLocalTransactions]);
+
+    return { salesTotal, expenseTotal };
+  }, [allTransactions, startDate, endDate]);
+
+  const formatDateDisplay = (date: Date) => {
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "2-digit",
+    });
+  };
+
+  // Quick date filter presets
+  const applyDateFilter = (preset: string) => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    switch (preset) {
+      case "today":
+        setStartDate(now);
+        setEndDate(tomorrow);
+        break;
+      case "yesterday":
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        setStartDate(yesterday);
+        setEndDate(now);
+        break;
+      case "week":
+        const weekStart = new Date(now);
+        weekStart.setDate(weekStart.getDate() - 7);
+        setStartDate(weekStart);
+        setEndDate(tomorrow);
+        break;
+      case "month":
+        const monthStart = new Date(now);
+        monthStart.setDate(1);
+        setStartDate(monthStart);
+        setEndDate(tomorrow);
+        break;
+      case "all":
+        // Set to a very early date and far future date
+        setStartDate(new Date(2020, 0, 1));
+        setEndDate(new Date(2100, 11, 31));
+        break;
+    }
+    setActivePicker(null);
+    setShowDateFilter(false);
+  };
 
   const [filterType, setFilterType] = useState<TransactionType | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -153,40 +216,20 @@ export default function TransactionScreen() {
   // Update transactions when new data arrives
   React.useEffect(() => {
     if (paginatedData?.transactions) {
-      // When server data arrives, filter out completed local transactions
-      // (they've been synced to server)
-      const completedLocalIds = localTransactions
-        .filter((t: any) => t.mutationStatus === "completed")
-        .map((t: any) => t.id);
-      
-      // Filter out completed local transactions from the list
-      const filteredLocals = localTransactions.filter(
-        (t: any) => !completedLocalIds.includes(t.id)
-      );
-      
       if (cursor === undefined) {
-        // Initial load - merge with local transactions
-        const merged = [...filteredLocals, ...paginatedData.transactions];
-        // Sort by timestamp (newest first)
-        merged.sort((a, b) => b.sortKey - a.sortKey);
-        setAllTransactions(merged);
+        setAllTransactions(paginatedData.transactions);
       } else {
-        // Append new transactions
         setAllTransactions((prev) => {
-          // Avoid duplicates
           const existingIds = new Set(prev.map((t: Transaction) => t.id));
           const newTransactions = paginatedData.transactions.filter(
             (t: Transaction) => !existingIds.has(t.id),
           );
-          const merged = [...prev, ...newTransactions];
-          // Sort by timestamp (newest first)
-          merged.sort((a, b) => b.sortKey - a.sortKey);
-          return merged;
+          return [...prev, ...newTransactions];
         });
       }
       setIsLoadingMore(false);
     }
-  }, [paginatedData, localTransactions]);
+  }, [paginatedData, cursor]);
 
   // Debug: log transactions as they arrive
   console.log(
@@ -218,37 +261,30 @@ export default function TransactionScreen() {
 
   // Filter transactions - data comes pre-sorted from backend by recency
   const filteredTransactions = allTransactions
-    ? filterType === "all"
-      ? allTransactions
-      : allTransactions.filter((t) => t.type === filterType)
+    ? allTransactions
+        .filter((t) => {
+          const txDate = parseTransactionDate(t.date);
+          return txDate && txDate >= startDate && txDate < endDate;
+        })
+        .filter((t) => filterType === "all" || t.type === filterType)
     : [];
 
-  const renderItem = ({ item }: { item: Transaction & { isPending?: boolean; mutationStatus?: string; errorMessage?: string } }) => {
+  const renderItem = ({
+    item,
+  }: {
+    item: Transaction & {
+      isPending?: boolean;
+      mutationStatus?: string;
+      errorMessage?: string;
+    };
+  }) => {
     const isIncome = item.type === "income";
     const isExpanded = expandedId === item.id;
     const itemCount =
       parseInt(item.items) || parseInt(item.items.split(" ")[0]) || 0;
-    const isPending = item.isPending;
-
-    // Get sync status icon
-    const getSyncIcon = () => {
-      if (!isPending) return null;
-      
-      if (item.mutationStatus === "completed") {
-        return <Cloud size={14} color={COLORS.green} />;
-      } else if (item.mutationStatus === "syncing") {
-        return <Loader2 size={14} color={COLORS.primaryBlue} />;
-      } else if (item.mutationStatus === "error") {
-        return <XCircle size={14} color={COLORS.red} />;
-      } else if (!isOnline) {
-        return <CloudOff size={14} color={COLORS.textGray} />;
-      } else {
-        return <Cloud size={14} color={COLORS.textGray} />;
-      }
-    };
 
     return (
-      <View style={[styles.transactionCard, isPending && styles.pendingCard]}>
+      <View style={styles.transactionCard}>
         <TouchableOpacity
           style={styles.cardMainContent}
           onPress={() => handleTransactionPress(item.id)}
@@ -256,9 +292,9 @@ export default function TransactionScreen() {
         >
           {/* Icon Section */}
           <View style={styles.iconWrapper}>
-            <View style={[styles.iconCircle, isPending && styles.pendingIconCircle]}>
+            <View style={styles.iconCircle}>
               {isIncome ? (
-                <Utensils color={COLORS.white} size={20} />
+                <ShoppingBag color={COLORS.white} size={20} />
               ) : (
                 <Coins color={COLORS.white} size={20} />
               )}
@@ -272,11 +308,6 @@ export default function TransactionScreen() {
                 <View style={styles.leftTopLeft}>
                   <View style={styles.txIdRow}>
                     <Text style={styles.txIdText}>{item.transactionId}</Text>
-                    {isPending && (
-                      <View style={styles.syncIndicator}>
-                        {getSyncIcon()}
-                      </View>
-                    )}
                   </View>
                   <View style={styles.itemsPill}>
                     <Text style={styles.itemsPillText}>{item.items}</Text>
@@ -295,21 +326,6 @@ export default function TransactionScreen() {
                 <Text style={styles.dateText}>
                   {item.date} • {item.time}
                 </Text>
-                {isPending && (
-                  <Text style={[
-                    styles.pendingText,
-                    item.mutationStatus === "completed" && styles.syncedText
-                  ]}>
-                    {item.mutationStatus === "completed" 
-                      ? "Synced ✓" 
-                      : item.mutationStatus === "syncing" 
-                      ? "Syncing..." 
-                      : item.mutationStatus === "error"
-                      ? `Failed: ${item.errorMessage?.substring(0, 30) || "Sync failed"}`
-                      : "Pending sync"
-                    }
-                  </Text>
-                )}
               </View>
             </View>
           </View>
@@ -424,6 +440,20 @@ export default function TransactionScreen() {
 
       {/* Main Content Body */}
       <View style={styles.contentContainer}>
+        {/* Date Filter Button */}
+        <View style={styles.dateFilterContainer}>
+          <TouchableOpacity
+            style={styles.dateFilterButton}
+            onPress={() => setShowDateFilter(true)}
+          >
+            <Calendar size={16} color={COLORS.primaryBlue} />
+            <Text style={styles.dateFilterText}>
+              {formatDateDisplay(startDate)} -{" "}
+              {formatDateDisplay(new Date(endDate.getTime() - 1))}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Summary Cards */}
         <View style={styles.summaryRow}>
           <TouchableOpacity
@@ -443,10 +473,10 @@ export default function TransactionScreen() {
               <Text style={styles.summaryLabel}>Sales</Text>
               <Text style={styles.summaryAmount}>
                 ₱
-                {financialSummary?.totalIncome?.toLocaleString("en-US", {
+                {filteredTotals.salesTotal.toLocaleString("en-US", {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
-                }) ?? "0.00"}
+                })}
               </Text>
             </View>
           </TouchableOpacity>
@@ -468,10 +498,10 @@ export default function TransactionScreen() {
               <Text style={styles.summaryLabel}>Expenses</Text>
               <Text style={styles.summaryAmount}>
                 ₱
-                {financialSummary?.totalExpense?.toLocaleString("en-US", {
+                {filteredTotals.expenseTotal.toLocaleString("en-US", {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
-                }) ?? "0.00"}
+                })}
               </Text>
             </View>
           </TouchableOpacity>
@@ -493,21 +523,209 @@ export default function TransactionScreen() {
               </View>
             ) : null
           }
-          ListEmptyComponent={() => (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                {paginatedData === undefined
-                  ? "Loading transactions..."
-                  : "No transactions found"}
-              </Text>
-              <Text style={styles.emptySubtext}>
-                {paginatedData !== undefined &&
-                  "Start making sales or adding expenses to see them here."}
-              </Text>
-            </View>
-          )}
+          ListEmptyComponent={() => {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            const tmrw = new Date(now);
+            tmrw.setDate(tmrw.getDate() + 1);
+            const isToday =
+              startDate.getTime() === now.getTime() &&
+              endDate.getTime() === tmrw.getTime();
+            return (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>
+                  {paginatedData === undefined
+                    ? "Loading transactions..."
+                    : isToday
+                      ? "No transactions yet today"
+                      : "No transactions found"}
+                </Text>
+                <Text style={styles.emptySubtext}>
+                  {paginatedData !== undefined &&
+                    (isToday
+                      ? "Start making sales or adding expenses to see them here."
+                      : "Try adjusting your date filter.")}
+                </Text>
+              </View>
+            );
+          }}
         />
       </View>
+
+      {/* Date Filter Modal */}
+      <Modal
+        visible={showDateFilter}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDateFilter(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Filter by Date</Text>
+              <TouchableOpacity onPress={() => setShowDateFilter(false)}>
+                <X size={24} color={COLORS.textGray} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.presetButtons}>
+              <TouchableOpacity
+                style={styles.presetButton}
+                onPress={() => applyDateFilter("today")}
+              >
+                <Text style={styles.presetButtonText}>Today</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetButton}
+                onPress={() => applyDateFilter("yesterday")}
+              >
+                <Text style={styles.presetButtonText}>Yesterday</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetButton}
+                onPress={() => applyDateFilter("week")}
+              >
+                <Text style={styles.presetButtonText}>Last 7 Days</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetButton}
+                onPress={() => applyDateFilter("month")}
+              >
+                <Text style={styles.presetButtonText}>This Month</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetButton}
+                onPress={() => applyDateFilter("all")}
+              >
+                <Text style={styles.presetButtonText}>All Time</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Custom Date Range Selection */}
+            <Text style={styles.customDateTitle}>Custom Range</Text>
+
+            <View style={styles.dateRangeRow}>
+              {/* From */}
+              <TouchableOpacity
+                style={styles.dateRangeButton}
+                onPress={() => {
+                  if (Platform.OS === "android") {
+                    setShowDateFilter(false);
+                    setActivePicker("start");
+                  } else {
+                    setActivePicker(activePicker === "start" ? null : "start");
+                  }
+                }}
+              >
+                <Text style={styles.dateRangeLabel}>From</Text>
+                <View style={styles.dateRangeValueRow}>
+                  <Calendar size={14} color={COLORS.primaryBlue} />
+                  <Text style={styles.dateRangeValue}>
+                    {formatDateDisplay(startDate)}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <Text style={styles.dateRangeSeparator}>—</Text>
+
+              {/* To */}
+              <TouchableOpacity
+                style={styles.dateRangeButton}
+                onPress={() => {
+                  if (Platform.OS === "android") {
+                    setShowDateFilter(false);
+                    setActivePicker("end");
+                  } else {
+                    setActivePicker(activePicker === "end" ? null : "end");
+                  }
+                }}
+              >
+                <Text style={styles.dateRangeLabel}>To</Text>
+                <View style={styles.dateRangeValueRow}>
+                  <Calendar size={14} color={COLORS.primaryBlue} />
+                  <Text style={styles.dateRangeValue}>
+                    {formatDateDisplay(new Date(endDate.getTime() - 1))}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {/* Inline spinner on iOS */}
+            {Platform.OS === "ios" && activePicker === "start" && (
+              <DateTimePicker
+                value={startDate}
+                mode="date"
+                display="spinner"
+                maximumDate={new Date(endDate.getTime() - 86400000)}
+                onChange={(_: DateTimePickerEvent, date?: Date) => {
+                  if (date) setStartDate(date);
+                }}
+                style={{ alignSelf: "center" }}
+              />
+            )}
+            {Platform.OS === "ios" && activePicker === "end" && (
+              <DateTimePicker
+                value={new Date(endDate.getTime() - 1)}
+                mode="date"
+                display="spinner"
+                minimumDate={new Date(startDate.getTime() + 86400000)}
+                onChange={(_: DateTimePickerEvent, date?: Date) => {
+                  if (date) {
+                    const next = new Date(date);
+                    next.setDate(next.getDate() + 1);
+                    next.setHours(0, 0, 0, 0);
+                    setEndDate(next);
+                  }
+                }}
+                style={{ alignSelf: "center" }}
+              />
+            )}
+
+            <TouchableOpacity
+              style={styles.applyButton}
+              onPress={() => {
+                setActivePicker(null);
+                setShowDateFilter(false);
+              }}
+            >
+              <Text style={styles.applyButtonText}>Apply</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Android native date dialogs */}
+      {Platform.OS === "android" && activePicker === "start" && (
+        <DateTimePicker
+          value={startDate}
+          mode="date"
+          display="default"
+          maximumDate={new Date(endDate.getTime() - 86400000)}
+          onChange={(event: DateTimePickerEvent, date?: Date) => {
+            setActivePicker(null);
+            setShowDateFilter(true);
+            if (event.type === "set" && date) setStartDate(date);
+          }}
+        />
+      )}
+      {Platform.OS === "android" && activePicker === "end" && (
+        <DateTimePicker
+          value={new Date(endDate.getTime() - 1)}
+          mode="date"
+          display="default"
+          minimumDate={new Date(startDate.getTime() + 86400000)}
+          onChange={(event: DateTimePickerEvent, date?: Date) => {
+            setActivePicker(null);
+            setShowDateFilter(true);
+            if (event.type === "set" && date) {
+              const next = new Date(date);
+              next.setDate(next.getDate() + 1);
+              next.setHours(0, 0, 0, 0);
+              setEndDate(next);
+            }
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -867,5 +1085,150 @@ const styles = StyleSheet.create({
   syncedText: {
     color: COLORS.green,
     fontStyle: "normal",
+  },
+  // Date filter styles
+  dateFilterContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 15,
+  },
+  dateFilterButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 8,
+    alignSelf: "flex-start",
+  },
+  dateFilterText: {
+    fontSize: 14,
+    color: COLORS.primaryBlue,
+    fontWeight: "600",
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  presetButtons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 20,
+  },
+  presetButton: {
+    backgroundColor: COLORS.lightBlueBg,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  presetButtonText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: COLORS.primaryBlue,
+  },
+  dateDisplay: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    backgroundColor: COLORS.lightBlueBg,
+    padding: 16,
+    borderRadius: 12,
+  },
+  dateDisplayItem: {
+    alignItems: "center",
+  },
+  dateDisplayLabel: {
+    fontSize: 12,
+    color: COLORS.textGray,
+    marginBottom: 4,
+  },
+  dateDisplayValue: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  customDateTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.textDark,
+    marginBottom: 12,
+    marginTop: 8,
+  },
+  datePickerButton: {
+    padding: 8,
+  },
+  dateNavButton: {
+    fontSize: 16,
+    color: COLORS.primaryBlue,
+    fontWeight: "700",
+  },
+  applyButton: {
+    backgroundColor: COLORS.primaryBlue,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 20,
+  },
+  applyButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  dateRangeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
+    gap: 8,
+  },
+  dateRangeButton: {
+    flex: 1,
+    backgroundColor: COLORS.lightBlueBg,
+    borderRadius: 12,
+    padding: 12,
+    alignItems: "center",
+  },
+  dateRangeLabel: {
+    fontSize: 11,
+    color: COLORS.textGray,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    marginBottom: 6,
+  },
+  dateRangeValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  dateRangeValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+  },
+  dateRangeSeparator: {
+    fontSize: 18,
+    color: COLORS.textGray,
+    fontWeight: "300",
+    paddingBottom: 4,
   },
 });

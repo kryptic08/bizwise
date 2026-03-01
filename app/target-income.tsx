@@ -102,9 +102,9 @@ export default function TargetIncomeScreen() {
           <Target color={COLORS.primaryBlue} size={64} />
         </View>
 
-        <Text style={styles.title}>Set Your Income Goal</Text>
+        <Text style={styles.title}>Set Your Sales Goal</Text>
         <Text style={styles.subtitle}>
-          Set a monthly income target to track your progress and receive
+          Set a monthly sales target to track your progress and receive
           motivating notifications.
         </Text>
 
@@ -162,7 +162,7 @@ export default function TargetIncomeScreen() {
             onPress={() => {
               Alert.alert(
                 "Clear Target",
-                "Are you sure you want to remove your income target?",
+                "Are you sure you want to remove your sales target?",
                 [
                   { text: "Cancel", style: "cancel" },
                   {

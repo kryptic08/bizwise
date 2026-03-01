@@ -574,6 +574,509 @@ export async function generatePDFReport(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Monthly Financial Report  (Income Statement template)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MonthlySaleItem {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  date: number; // unix ms
+}
+
+export interface MonthlyExpenseItem {
+  category: string;
+  description: string;
+  amount: number; // line total (price × qty)
+  unitPrice?: number; // unit price per item
+  quantity?: number;
+  date: number; // unix ms
+}
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** Assigns a week label (Week 1–5) based on day-of-month. */
+function getWeekLabel(date: Date): string {
+  const day = date.getDate();
+  if (day <= 7) return "Week 1";
+  if (day <= 14) return "Week 2";
+  if (day <= 21) return "Week 3";
+  if (day <= 28) return "Week 4";
+  return "Week 5";
+}
+
+function fmt(n: number): string {
+  return (n ?? 0).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** Generates the HTML for the Monthly Financial Report PDF. */
+function generateMonthlyReportHTML(
+  ownerName: string,
+  businessName: string,
+  month: number,
+  year: number,
+  sales: MonthlySaleItem[],
+  expenses: MonthlyExpenseItem[],
+): string {
+  const monthName = MONTH_NAMES[month - 1];
+
+  // ── SALES: group by week, then aggregate per product ─────────────────────
+  const WEEK_ORDER = ["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"];
+
+  const salesByWeek: Record<string, MonthlySaleItem[]> = {};
+  for (const s of sales) {
+    const wk = getWeekLabel(new Date(s.date));
+    (salesByWeek[wk] ??= []).push(s);
+  }
+  const salesGrandTotal = sales.reduce((a, s) => a + s.total, 0);
+
+  // ── EXPENSES: group by week, then per category ────────────────────────────
+  const expByWeek: Record<string, MonthlyExpenseItem[]> = {};
+  for (const e of expenses) {
+    const wk = getWeekLabel(new Date(e.date));
+    (expByWeek[wk] ??= []).push(e);
+  }
+  const expGrandTotal = expenses.reduce((a, e) => a + e.amount, 0);
+
+  // ── Income Statement calculations ─────────────────────────────────────────
+  // Aggregate actual totals per category (no hardcoding)
+  const categoryTotals: Record<string, number> = {};
+  for (const e of expenses) {
+    categoryTotals[e.category] = (categoryTotals[e.category] ?? 0) + e.amount;
+  }
+
+  // Categories that belong to Cost of Goods Sold
+  const COGS_CATS = new Set([
+    "Raw Materials",
+    "Merchandise Inventory",
+    "Construction Materials",
+    "Labor & Subcontracting",
+    "Packaging Materials",
+    "Store Supplies",
+  ]);
+
+  const cogsEntries = Object.entries(categoryTotals).filter(([cat]) =>
+    COGS_CATS.has(cat),
+  );
+  const opEntries = Object.entries(categoryTotals).filter(
+    ([cat]) => !COGS_CATS.has(cat),
+  );
+  const totalCOGS = cogsEntries.reduce((a, [, v]) => a + v, 0);
+  const totalOp = opEntries.reduce((a, [, v]) => a + v, 0);
+  const revenue = salesGrandTotal;
+  const grossProfit = revenue - totalCOGS;
+  const netProfit = grossProfit - totalOp;
+  const isLoss = netProfit < 0;
+
+  // ── Build Sales rows ──────────────────────────────────────────────────────
+  const salesRows = WEEK_ORDER.filter((wk) => salesByWeek[wk])
+    .map((wk) => {
+      const items = salesByWeek[wk];
+      const weekTotal = items.reduce((a, s) => a + s.total, 0);
+
+      // Aggregate per product name
+      const prodMap: Record<
+        string,
+        { qty: number; unit: number; total: number }
+      > = {};
+      for (const s of items) {
+        const p = (prodMap[s.name] ??= { qty: 0, unit: s.unitPrice, total: 0 });
+        p.qty += s.quantity;
+        p.total += s.total;
+      }
+
+      const rows = Object.entries(prodMap)
+        .map(
+          ([name, p]) => `
+        <tr>
+          <td class="num">${p.qty}</td>
+          <td>${name}</td>
+          <td class="num">₱${fmt(p.unit)}</td>
+          <td class="num">₱${fmt(p.total)}</td>
+        </tr>`,
+        )
+        .join("");
+
+      return `
+        <tr class="wk-header"><td colspan="4">${wk}</td></tr>
+        ${rows}
+        <tr class="sub-row">
+          <td colspan="3">Subtotal — ${wk}</td>
+          <td class="num">₱${fmt(weekTotal)}</td>
+        </tr>`;
+    })
+    .join("");
+
+  // ── Build Expense rows (per category within each week, one row per item) ───
+  const expRows = WEEK_ORDER.filter((wk) => expByWeek[wk])
+    .map((wk) => {
+      const items = expByWeek[wk];
+      const weekTotal = items.reduce((a, e) => a + e.amount, 0);
+
+      // Group items by category for visual section headers only
+      const catGroups: Record<string, MonthlyExpenseItem[]> = {};
+      for (const e of items) {
+        (catGroups[e.category] ??= []).push(e);
+      }
+
+      // Each category header followed by one row per individual item
+      const catBlocks = Object.entries(catGroups)
+        .map(([cat, catItems]) => {
+          const itemRows = catItems
+            .map((e) => {
+              const unit =
+                e.unitPrice ??
+                (e.quantity && e.quantity > 1
+                  ? e.amount / e.quantity
+                  : e.amount);
+              return `
+        <tr>
+          <td class="num">${e.quantity ?? 1}</td>
+          <td style="padding-left:32px;">${e.description}</td>
+          <td class="num">₱${fmt(unit)}</td>
+          <td class="num">₱${fmt(e.amount)}</td>
+        </tr>`;
+            })
+            .join("");
+          return `
+        <tr class="cat-header"><td colspan="4">&nbsp;&nbsp;&nbsp;${cat}</td></tr>
+        ${itemRows}`;
+        })
+        .join("");
+
+      return `
+        <tr class="wk-header"><td colspan="4">${wk}</td></tr>
+        ${catBlocks}
+        <tr class="sub-row">
+          <td colspan="3">Subtotal — ${wk}</td>
+          <td class="num">₱${fmt(weekTotal)}</td>
+        </tr>`;
+    })
+    .join("");
+
+  // ── HTML ──────────────────────────────────────────────────────────────────
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${ownerName.replace(/\s+/g, "")}_${monthName}${year}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    font-family:'Georgia','Times New Roman',serif;
+    font-size:12px;
+    color:#111;
+    background:#fff;
+    padding:36px 44px;
+    line-height:1.45;
+  }
+
+  /* ── Page breaks ── */
+  .page-break{page-break-before:always;margin-top:0;}
+
+  /* ── Section heading ── */
+  .sec-heading{
+    font-size:13px;font-weight:bold;text-transform:uppercase;
+    color:#2c527a;border-bottom:2px solid #2c527a;
+    padding-bottom:4px;margin-bottom:14px;letter-spacing:.06em;
+  }
+
+  /* ── Data tables ── */
+  table.dt{
+    width:100%;border-collapse:collapse;margin-bottom:20px;
+    font-size:11.5px;
+  }
+  table.dt thead th{
+    background:#2c527a;color:#fff;padding:7px 9px;
+    font-weight:600;border:1px solid #1e3a5f;
+  }
+  table.dt thead th:not(:nth-child(2)){text-align:right;}
+  table.dt thead th:nth-child(2){text-align:left;}
+  table.dt td{
+    padding:5px 9px;border:1px solid #d1d5db;
+    vertical-align:middle;
+  }
+  table.dt td.num{text-align:right;}
+  table.dt tr.wk-header td{
+    background:#dbeafe;font-weight:700;color:#1e3a5f;
+    padding:5px 9px;border:1px solid #93c5fd;
+  }
+  table.dt tr.cat-header td{
+    background:#f0f4f8;font-weight:600;color:#374151;
+    font-style:italic;padding:4px 9px;border:1px solid #d1d5db;
+  }
+  table.dt tr.sub-row td{
+    background:#f8fafc;font-weight:600;font-style:italic;
+    border-top:1px solid #9ca3af;
+  }
+  table.dt tr.sub-row td:last-child{text-align:right;}
+  table.dt tfoot tr td{
+    background:#1e3a5f;color:#fff;font-weight:700;
+    padding:9px;border:1px solid #1e3a5f;
+  }
+  table.dt tfoot tr td:last-child{text-align:right;}
+
+  /* ── Income Statement ── */
+  .is-wrap{max-width:520px;margin:24px auto 0;}
+  .is-head{text-align:center;margin-bottom:8px;}
+  .is-bizname{font-size:18px;font-weight:bold;letter-spacing:.04em;}
+  hr.is-rule{border:none;border-top:1.5px solid #111;margin:5px 0;}
+  .is-title{font-size:12.5px;font-weight:bold;text-transform:uppercase;letter-spacing:.07em;}
+  .is-period{font-size:11.5px;margin-top:3px;}
+
+  table.is{
+    width:100%;border-collapse:collapse;
+    margin-top:16px;font-size:12px;
+  }
+  table.is td{padding:3px 4px;vertical-align:bottom;}
+  .is-lbl td:first-child{font-weight:bold;padding-top:10px;}
+  .is-ind td:first-child{padding-left:28px;}
+  .is-total td{
+    font-weight:bold;border-top:1px solid #6b7280;
+    padding-top:5px !important;
+  }
+  .is-gross td{
+    font-weight:bold;font-size:13px;
+    border-top:1.5px solid #111;border-bottom:1.5px solid #111;
+    padding:7px 4px !important;text-transform:uppercase;
+  }
+  .is-oplbl td{font-weight:bold;padding-top:10px;}
+  .is-net td{
+    font-weight:bold;font-size:13.5px;
+    border-top:2px solid #111;border-bottom:3px double #111;
+    padding:9px 4px !important;text-transform:uppercase;letter-spacing:.04em;
+  }
+  .is-r{text-align:right;width:32%;}
+  .profit{color:#15803d;}
+  .loss{color:#b91c1c;}
+
+  /* ── Footer ── */
+  .rpt-footer{
+    margin-top:36px;border-top:1px solid #d1d5db;
+    padding-top:10px;text-align:center;font-size:9.5px;color:#9ca3af;
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════
+     SECTION 1 — SALES
+═════════════════════════════════════════════════════════════ -->
+<div class="sec-heading">Sales &mdash; ${monthName} ${year}</div>
+
+${
+  sales.length === 0
+    ? `<p style="color:#6b7280;margin-bottom:20px;font-style:italic;">No sales records for ${monthName} ${year}.</p>`
+    : `<table class="dt">
+  <thead>
+    <tr>
+      <th style="width:8%;">UNIT</th>
+      <th style="width:48%;">PARTICULARS</th>
+      <th style="width:22%;">COST/UNIT</th>
+      <th style="width:22%;">TOTAL COST</th>
+    </tr>
+  </thead>
+  <tbody>${salesRows}</tbody>
+  <tfoot>
+    <tr>
+      <td colspan="3">SALES GRAND TOTAL</td>
+      <td>₱${fmt(salesGrandTotal)}</td>
+    </tr>
+  </tfoot>
+</table>`
+}
+
+<!-- ════════════════════════════════════════════════════════════
+     SECTION 2 — EXPENSES
+═════════════════════════════════════════════════════════════ -->
+<div class="sec-heading" style="margin-top:28px;">Expenses &mdash; ${monthName} ${year}</div>
+
+${
+  expenses.length === 0
+    ? `<p style="color:#6b7280;margin-bottom:20px;font-style:italic;">No expense records for ${monthName} ${year}.</p>`
+    : `<table class="dt">
+  <thead>
+    <tr>
+      <th style="width:8%;">UNIT</th>
+      <th style="width:48%;">PARTICULARS</th>
+      <th style="width:22%;">COST/UNIT</th>
+      <th style="width:22%;">TOTAL COST</th>
+    </tr>
+  </thead>
+  <tbody>${expRows}</tbody>
+  <tfoot>
+    <tr>
+      <td colspan="3">EXPENSES GRAND TOTAL</td>
+      <td>₱${fmt(expGrandTotal)}</td>
+    </tr>
+  </tfoot>
+</table>`
+}
+
+<!-- ════════════════════════════════════════════════════════════
+     SECTION 3 — INCOME STATEMENT
+═════════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="is-wrap">
+
+  <div class="is-head">
+    <div class="is-bizname">${businessName}</div>
+    <hr class="is-rule"/>
+    <div class="is-title">Financial Performance (Income Statement)</div>
+    <div class="is-period">For the Month of ${monthName} ${year}</div>
+    <hr class="is-rule"/>
+  </div>
+
+  <table class="is">
+  <tbody>
+
+    <tr>
+      <td>Revenue</td>
+      <td class="is-r">&#8369;${fmt(revenue)}</td>
+    </tr>
+
+    <tr class="is-lbl"><td colspan="2">Less: Cost of Goods Sold</td></tr>
+    ${cogsEntries
+      .map(
+        ([cat, total]) => `
+    <tr class="is-ind">
+      <td>${cat}</td>
+      <td class="is-r">&#8369;${fmt(total)}</td>
+    </tr>`,
+      )
+      .join("")}
+    <tr class="is-total is-ind">
+      <td>Total Cost of Goods Sold</td>
+      <td class="is-r">&#8369;${fmt(totalCOGS)}</td>
+    </tr>
+
+    <tr class="is-gross">
+      <td>Gross Profit</td>
+      <td class="is-r ${grossProfit < 0 ? "loss" : "profit"}">&#8369;${fmt(grossProfit)}</td>
+    </tr>
+
+    <tr class="is-oplbl"><td colspan="2">Less: Operating Expenses</td></tr>
+    ${opEntries
+      .filter(([, v]) => v > 0)
+      .map(
+        ([cat, total]) => `
+    <tr class="is-ind"><td>${cat}</td><td class="is-r">&#8369;${fmt(total)}</td></tr>`,
+      )
+      .join("")}
+    <tr class="is-total is-ind">
+      <td>Total Operating Expense</td>
+      <td class="is-r">&#8369;${fmt(totalOp)}</td>
+    </tr>
+
+    <tr class="is-net">
+      <td class="${isLoss ? "loss" : "profit"}">${isLoss ? "NET LOSS" : "NET PROFIT"}</td>
+      <td class="is-r ${isLoss ? "loss" : "profit"}">&#8369;${fmt(Math.abs(netProfit))}</td>
+    </tr>
+
+  </tbody>
+  </table>
+</div>
+
+<div class="rpt-footer">
+  Generated by BizWise &nbsp;&bull;&nbsp; ${ownerName} &nbsp;&bull;&nbsp; ${monthName} ${year}
+  &nbsp;&bull;&nbsp; &copy; ${new Date().getFullYear()} BizWise
+</div>
+
+</body>
+</html>`;
+}
+
+/**
+ * Generate and share a Monthly Financial Report PDF.
+ *
+ * @param ownerName    - User's full name  (used in filename and footer)
+ * @param businessName - Stall / shop name (used in Income Statement header)
+ * @param month        - 1–12
+ * @param year         - e.g. 2026
+ * @param sales        - Sales for the selected month
+ * @param expenses     - Expenses for the selected month
+ */
+export async function generateMonthlyFinancialReportPDF(
+  ownerName: string,
+  businessName: string,
+  month: number,
+  year: number,
+  sales: MonthlySaleItem[],
+  expenses: MonthlyExpenseItem[],
+): Promise<void> {
+  if (sales.length === 0 && expenses.length === 0) {
+    Alert.alert(
+      "No Data",
+      `No records found for ${MONTH_NAMES[month - 1]} ${year}.\nPlease select a different month.`,
+    );
+    return;
+  }
+
+  try {
+    const html = generateMonthlyReportHTML(
+      ownerName,
+      businessName,
+      month,
+      year,
+      sales,
+      expenses,
+    );
+
+    const { uri } = await Print.printToFileAsync({ html, base64: false });
+
+    const monthName = MONTH_NAMES[month - 1];
+    // Filename: UserName_October2026.pdf  (no spaces)
+    const safeName = ownerName.replace(/\s+/g, "");
+    const pdfName = `${safeName}_${monthName}${year}.pdf`;
+
+    // Attempt to rename for a friendlier filename in the share sheet
+    const dir = uri.substring(0, uri.lastIndexOf("/") + 1);
+    const destUri = dir + pdfName;
+    try {
+      await FileSystem.moveAsync({ from: uri, to: destUri });
+    } catch {
+      // Rename not critical — share the original
+    }
+
+    const fileInfo = await FileSystem.getInfoAsync(destUri);
+    const finalUri = fileInfo.exists ? destUri : uri;
+
+    const isAvailable = await Sharing.isAvailableAsync();
+    if (isAvailable) {
+      await Sharing.shareAsync(finalUri, {
+        mimeType: "application/pdf",
+        dialogTitle: `Save ${pdfName}`,
+        UTI: "com.adobe.pdf",
+      });
+    } else {
+      Alert.alert("PDF Ready", `Report saved as ${pdfName}.`);
+    }
+  } catch (error) {
+    console.error("Monthly report PDF error:", error);
+    Alert.alert("Error", "Failed to generate report. Please try again.");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Calculate profit margin percentage
  */

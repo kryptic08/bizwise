@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ArrowLeft, HelpCircle, Minus, Plus } from "lucide-react-native";
+import { ArrowLeft, Minus, Plus } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
   Alert,
@@ -37,11 +37,10 @@ export default function CheckoutScreen() {
   const { cartData } = useLocalSearchParams();
   const { user } = useAuth();
   const { isOnline } = useOffline();
-  const { addMutation, pendingCount } = useMutationQueue();
+  const { createSale } = useMutationQueue();
   const [cartItems, setCartItems] = useState<any[]>([]);
   const [amountReceived, setAmountReceived] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [pendingTempId, setPendingTempId] = useState<string | null>(null);
 
   useEffect(() => {
     if (cartData) {
@@ -105,15 +104,25 @@ export default function CheckoutScreen() {
         quantity: item.qty,
       }));
 
-      // Add to mutation queue (works offline)
-      const tempId = await addMutation("sale", {
+      if (!isOnline) {
+        Alert.alert(
+          "Offline",
+          "You need an internet connection to complete this transaction. Please try again when you're back online.",
+          [{ text: "OK" }],
+        );
+        setIsProcessing(false);
+        return;
+      }
+
+      // Create sale online
+      const result = await createSale({
         items: saleItems,
         paymentReceived: received,
         userId: user?.userId || "",
         clientTimestamp: Date.now(),
       });
 
-      setPendingTempId(tempId);
+      const tempId = result.transactionId;
 
       // Check if this is the first sale and send celebration
       checkFirstSale(true).catch(console.error);
@@ -213,17 +222,47 @@ export default function CheckoutScreen() {
         <Text style={styles.headerTitle}>Sales Summary</Text>
         <View style={styles.headerRight}>
           <SyncBadge compact />
-          <TouchableOpacity style={styles.headerButton}>
-            <View style={styles.helpIconBg}>
-              <HelpCircle color={COLORS.primaryBlue} size={18} />
-            </View>
-          </TouchableOpacity>
         </View>
       </View>
 
       {/* Main Content */}
       <View style={styles.contentContainer}>
-        {/* Payment Section - Moved to top */}
+        {/* Scrollable Order Section */}
+        <View style={styles.orderSection}>
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Cart Items */}
+            <View style={styles.cartContainer}>
+              {cartItems.length > 0 ? (
+                cartItems.map(renderCartItem)
+              ) : (
+                <View style={styles.emptyCartContainer}>
+                  <Text style={styles.emptyCartText}>No items in cart</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Totals Section */}
+            <View style={styles.totalsContainer}>
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Subtotal:</Text>
+                <Text style={styles.totalValue}>
+                  ₱{getTotalAmount().toFixed(2)}
+                </Text>
+              </View>
+              <View style={[styles.totalRow, styles.grandTotalRow]}>
+                <Text style={styles.grandTotalLabel}>Total:</Text>
+                <Text style={styles.grandTotalValue}>
+                  ₱{getTotalAmount().toFixed(2)}
+                </Text>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
+
+        {/* Payment Section - Moved to bottom */}
         <View style={styles.paymentContainer}>
           <Text style={styles.paymentTitle}>Payment</Text>
 
@@ -251,45 +290,6 @@ export default function CheckoutScreen() {
               </Text>
             </View>
           )}
-        </View>
-
-        {/* Scrollable Order Section */}
-        <View style={styles.orderSection}>
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Cart Items */}
-            <View style={styles.cartContainer}>
-              {cartItems.length > 0 ? (
-                cartItems.map(renderCartItem)
-              ) : (
-                <View style={styles.emptyCartContainer}>
-                  <Text style={styles.emptyCartText}>No items in cart</Text>
-                </View>
-              )}
-            </View>
-
-            {/* Totals Section */}
-            <View style={styles.totalsContainer}>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Subtotal:</Text>
-                <Text style={styles.totalValue}>
-                  ₱{getTotalAmount().toFixed(2)}
-                </Text>
-              </View>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Tax:</Text>
-                <Text style={styles.totalValue}>₱0.00</Text>
-              </View>
-              <View style={[styles.totalRow, styles.grandTotalRow]}>
-                <Text style={styles.grandTotalLabel}>Total:</Text>
-                <Text style={styles.grandTotalValue}>
-                  ₱{getTotalAmount().toFixed(2)}
-                </Text>
-              </View>
-            </View>
-          </ScrollView>
         </View>
 
         {/* Complete Transaction Button */}
@@ -519,7 +519,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     marginHorizontal: 20,
     marginTop: 20,
-    marginBottom: 10,
+    marginBottom: 100, // Increased margin to make room for the checkout button
     borderRadius: 12,
     padding: 16,
     shadowColor: "#000",
@@ -546,11 +546,13 @@ const styles = StyleSheet.create({
   amountInput: {
     backgroundColor: COLORS.lightBlueBg,
     borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
+    padding: 16,
+    fontSize: 24,
     color: COLORS.textDark,
     borderWidth: 1,
     borderColor: COLORS.borderGray,
+    height: 60, // Increased height for better visibility
+    textAlign: "center",
   },
   changeContainer: {
     flexDirection: "row",

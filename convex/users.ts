@@ -1,12 +1,28 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+// ─── Password hashing (SHA-256 with per-user salt via email) ────────────────
+// Convex runs in a V8 environment with the Web Crypto API available.
+async function hashPassword(email: string, password: string): Promise<string> {
+  const input = `${email.toLowerCase()}:${password}`;
+  const encoded = new TextEncoder().encode(input);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Returns true when a stored password value is already a SHA-256 hex hash. */
+function isHashed(value: string): boolean {
+  return /^[0-9a-f]{64}$/.test(value);
+}
+
 // Create a new user (signup)
 export const createUser = mutation({
   args: {
     email: v.string(),
     password: v.string(),
     name: v.optional(v.string()),
+    businessType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check if user already exists
@@ -19,11 +35,14 @@ export const createUser = mutation({
       throw new Error("User with this email already exists");
     }
 
-    // Create the user (in production, hash the password!)
+    // Hash the password before storing
+    const hashed = await hashPassword(args.email, args.password);
+
     const userId = await ctx.db.insert("users", {
       email: args.email.toLowerCase(),
-      password: args.password, // TODO: Hash in production
+      password: hashed,
       name: args.name || args.email.split("@")[0],
+      businessType: args.businessType,
       createdAt: Date.now(),
     });
 
@@ -47,8 +66,23 @@ export const loginUser = mutation({
       throw new Error("Invalid email or password");
     }
 
-    // Check password (in production, compare hashed passwords!)
-    if (user.password !== args.password) {
+    // Compare password – support both legacy plaintext and new SHA-256 hashes.
+    // On first login with legacy plaintext, auto-upgrade to hash.
+    let passwordValid = false;
+    if (isHashed(user.password)) {
+      const hashed = await hashPassword(args.email, args.password);
+      passwordValid = hashed === user.password;
+    } else {
+      // Legacy plaintext comparison (migrate on success)
+      passwordValid = user.password === args.password;
+      if (passwordValid) {
+        // Silently upgrade to hashed storage
+        const hashed = await hashPassword(args.email, args.password);
+        await ctx.db.patch(user._id, { password: hashed });
+      }
+    }
+
+    if (!passwordValid) {
       throw new Error("Invalid email or password");
     }
 
@@ -66,6 +100,7 @@ export const loginUser = mutation({
       name: user.name,
       phone: user.phone,
       pin: user.pin,
+      businessType: user.businessType,
       profilePicture: profilePictureUrl,
     };
   },
@@ -172,13 +207,21 @@ export const updatePassword = mutation({
       throw new Error("User not found");
     }
 
-    // Verify current password
-    if (user.password !== args.currentPassword) {
+    // Verify current password (supports legacy plaintext + hashed)
+    let currentValid = false;
+    if (isHashed(user.password)) {
+      const hashed = await hashPassword(user.email, args.currentPassword);
+      currentValid = hashed === user.password;
+    } else {
+      currentValid = user.password === args.currentPassword;
+    }
+    if (!currentValid) {
       throw new Error("Current password is incorrect");
     }
 
-    // Update to new password
-    await ctx.db.patch(args.userId, { password: args.newPassword });
+    // Store new password as hash
+    const newHashed = await hashPassword(user.email, args.newPassword);
+    await ctx.db.patch(args.userId, { password: newHashed });
     return { success: true };
   },
 });
@@ -195,8 +238,15 @@ export const deleteUser = mutation({
       throw new Error("User not found");
     }
 
-    // Verify password
-    if (user.password !== args.password) {
+    // Verify password (supports legacy plaintext + hashed)
+    let pwValid = false;
+    if (isHashed(user.password)) {
+      const hashed = await hashPassword(user.email, args.password);
+      pwValid = hashed === user.password;
+    } else {
+      pwValid = user.password === args.password;
+    }
+    if (!pwValid) {
       throw new Error("Incorrect password");
     }
 
@@ -381,5 +431,33 @@ export const getTargetIncome = query({
     if (!user) return null;
 
     return user.targetIncome || null;
+  },
+});
+
+// Update user's business type
+export const updateBusinessType = mutation({
+  args: {
+    userId: v.id("users"),
+    businessType: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    await ctx.db.patch(args.userId, { businessType: args.businessType });
+    return { success: true, businessType: args.businessType };
+  },
+});
+
+// Get user's business type
+export const getBusinessType = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+
+    return user.businessType || null;
   },
 });

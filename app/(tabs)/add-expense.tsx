@@ -1,4 +1,7 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
+import DateTimePicker, {
+  DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
@@ -6,8 +9,10 @@ import { useRouter } from "expo-router";
 import LottieView from "lottie-react-native";
 import {
   ArrowLeft,
+  Calendar,
   Camera,
   ChevronDown,
+  Lock,
   Plus,
   Trash2,
   X,
@@ -17,6 +22,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -29,6 +35,11 @@ import { SyncBadge } from "../components/SyncBadge";
 import { useAuth } from "../context/AuthContext";
 import { useMutationQueue } from "../providers/MutationQueueProvider";
 import { useOffline } from "../providers/OfflineProvider";
+import {
+  categorizeItemForBusiness,
+  getBusinessTypePromptContext,
+  getCategoriesForBusinessType,
+} from "../utils/categorizationEngine";
 
 const COLORS = {
   primaryBlue: "#3b6ea5",
@@ -38,16 +49,7 @@ const COLORS = {
   textGray: "#9ca3af",
 };
 
-// Available expense categories
-const EXPENSE_CATEGORIES = [
-  "Raw Materials",
-  "Packaging Materials",
-  "Store Supplies",
-  "Utilities",
-  "Equipment",
-  "Transportation",
-  "General",
-];
+// EXPENSE_CATEGORIES is now derived dynamically per business type (see getCategoriesForBusinessType).
 
 // Google Gemini Vision API - round-robin across models and API keys
 const GEMINI_API_KEYS = [
@@ -76,13 +78,18 @@ interface ExpenseItem {
   amount: string;
   quantity: string;
   total: string;
+  /** True when the item was populated by OCR / AI scan. Fields are read-only. */
+  isOcrSource?: boolean;
 }
 
 export default function AddExpenseScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { isOnline } = useOffline();
-  const { addMutation } = useMutationQueue();
+  const { createExpense } = useMutationQueue();
+
+  // Dynamic categories based on the signed-in user's business type
+  const expenseCategories = getCategoriesForBusinessType(user?.businessType);
 
   const [expenses, setExpenses] = useState<ExpenseItem[]>([
     {
@@ -104,12 +111,18 @@ export default function AddExpenseScreen() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [customCategory, setCustomCategory] = useState("");
   const [processingMessage, setProcessingMessage] = useState("");
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // Date state - default to today
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [selectedDate, setSelectedDate] = useState<Date>(today);
+
   const lottieRef = useRef<LottieView>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const getCurrentDate = () => {
-    const date = new Date();
-    return date.toLocaleDateString("en-US", {
+    return selectedDate.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -193,6 +206,14 @@ export default function AddExpenseScreen() {
     setExpenses(
       expenses.map((item) => {
         if (item.id === id) {
+          // Prevent editing locked OCR fields
+          if (
+            item.isOcrSource &&
+            (field === "title" || field === "amount" || field === "quantity")
+          ) {
+            return item;
+          }
+
           const updated = { ...item, [field]: value };
 
           // Calculate total if amount or quantity changes
@@ -202,6 +223,17 @@ export default function AddExpenseScreen() {
             const quantity =
               parseFloat(field === "quantity" ? value : item.quantity) || 0;
             updated.total = (amount * quantity).toFixed(2);
+          }
+
+          // Auto-categorize when the title changes on a manual (non-OCR) item
+          if (field === "title" && !item.isOcrSource) {
+            const trimmed = value.trim();
+            if (trimmed.length >= 3) {
+              updated.category = categorizeItemForBusiness(
+                trimmed,
+                user?.businessType,
+              );
+            }
           }
 
           return updated;
@@ -248,15 +280,26 @@ export default function AddExpenseScreen() {
                 title: expense.title,
                 amount: parseFloat(expense.amount),
                 quantity: parseInt(expense.quantity) || 1,
-                total: parseFloat(expense.total || "0"),
               }));
 
-              // Add to mutation queue (works offline)
-              const tempId = await addMutation("expense", {
+              if (!isOnline) {
+                Alert.alert(
+                  "Offline",
+                  "You need an internet connection to save expenses. Please try again when you're back online.",
+                  [{ text: "OK" }],
+                );
+                setIsSaving(false);
+                return;
+              }
+
+              // Create expense online
+              const result = await createExpense({
                 items,
                 userId: user?.userId || "",
                 clientTimestamp: Date.now(),
               });
+
+              const tempId = result.transactionId;
 
               // Reset form after successful save
               setExpenses([
@@ -275,9 +318,11 @@ export default function AddExpenseScreen() {
 
               // Show appropriate message based on online status
               if (isOnline) {
-                Alert.alert("Success", `Expenses saved successfully!\nTransaction ID: ${tempId}`, [
-                  { text: "OK", onPress: () => router.back() },
-                ]);
+                Alert.alert(
+                  "Success",
+                  `Expenses saved successfully!\nTransaction ID: ${tempId}`,
+                  [{ text: "OK", onPress: () => router.back() }],
+                );
               } else {
                 Alert.alert(
                   "Saved Offline",
@@ -414,25 +459,19 @@ export default function AddExpenseScreen() {
   // ══════════════════════════════════════════════════════════
 
   // Receipt parsing prompt (shared between Gemini and OpenRouter)
-  const getReceiptPrompt = (text: string) =>
-    `You are an expert at parsing receipt text from the Philippines. Extract ONLY items that are clearly visible in the receipt.
+  const getReceiptPrompt = (text: string) => {
+    const businessContext = getBusinessTypePromptContext(user?.businessType);
+    return `You are an expert at parsing receipt text from the Philippines. Extract ONLY items that are clearly visible in the receipt.
 
 IMPORTANT: DO NOT MAKE UP, INVENT, OR HALLUCINATE ANY ITEMS. Only extract what you actually see in the text.
+
+${businessContext}
 
 For each item found, provide:
 1. title: The name of the item (clean it up, capitalize properly)
 2. amount: The unit price (number only, no currency symbol)
 3. quantity: How many were purchased (default to 1 if not specified)
-4. category: One of these categories: Raw Materials, Packaging Materials, Store Supplies, Utilities, Equipment, Transportation, General
-
-CATEGORY GUIDELINES:
-- Raw Materials: ingredients, food items, meat, vegetables, flour, sugar, etc.
-- Packaging Materials: boxes, bags, containers, wrappers, bottles, labels
-- Store Supplies: cleaning items, paper, pens, office supplies, uniforms
-- Utilities: electricity, water, internet bills
-- Equipment: machines, appliances, tools, hardware
-- Transportation: fuel, gas, vehicle-related, delivery
-- General: anything that doesn't fit other categories
+4. category: One of the available categories listed above for this business type
 
 CRITICAL RULES FOR PHILIPPINE RECEIPTS:
 - Each item appears on ONE LINE ONLY in receipts - DO NOT combine multiple lines into one item name
@@ -461,6 +500,7 @@ Return ONLY a JSON array (raw JSON, no code blocks, no markdown):
 [{"title": "Chicken Breast", "amount": 150, "quantity": 1, "category": "Raw Materials"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}]
 
 If no items found or text is unclear, return: []`;
+  };
 
   // Extract items from AI response text
   const extractItemsFromAIResponse = (aiResponse: string): any[] | null => {
@@ -489,16 +529,19 @@ If no items found or text is unclear, return: []`;
   ) => {
     console.log("Parsing receipt with Gemini Vision...");
 
-    // Vision-optimized prompt
+    // Vision-optimized prompt — inject business type context
+    const businessContext = getBusinessTypePromptContext(user?.businessType);
     const visionPrompt = `You are an expert at analyzing receipt images from the Philippines. Look at this receipt image and extract ALL items that are visible.
 
 IMPORTANT: DO NOT MAKE UP, INVENT, OR HALLUCINATE ANY ITEMS. Only extract what you can actually see in the image.
+
+${businessContext}
 
 For each item found, provide:
 1. title: The name of the item (clean it up, capitalize properly)
 2. amount: The unit price (number only, no currency symbol)
 3. quantity: How many were purchased (default to 1 if not specified)
-4. category: One of these categories: Raw Materials, Packaging Materials, Store Supplies, Utilities, Equipment, Transportation, General
+4. category: One of the available categories listed above for this business type
 
 MERGE DUPLICATE ITEMS:
 - If you see the SAME product name multiple times on the receipt (same item appearing on different lines), DO NOT create multiple separate items
@@ -506,15 +549,6 @@ MERGE DUPLICATE ITEMS:
 - Example: If you see "Rice - ₱25" and "Rice - ₱25" on separate lines, return ONE item: {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}
 - Example: If you see "Chicken x2 - ₱150" and "Chicken x1 - ₱150", return ONE item: {"title": "Chicken", "amount": 150, "quantity": 3, "category": "Raw Materials"}
 - Only merge items that have the EXACT same name and unit price
-
-CATEGORY GUIDELINES:
-- Raw Materials: ingredients, food items, meat, vegetables, flour, sugar, etc.
-- Packaging Materials: boxes, bags, containers, wrappers, bottles, labels
-- Store Supplies: cleaning items, paper, pens, office supplies, uniforms
-- Utilities: electricity, water, internet bills
-- Equipment: machines, appliances, tools, hardware
-- Transportation: fuel, gas, vehicle-related, delivery
-- General: anything that doesn't fit other categories
 
 CRITICAL RULES FOR PHILIPPINE RECEIPTS:
 - Many receipts are HANDWRITTEN and may not have PHP/₱ symbols
@@ -525,7 +559,7 @@ CRITICAL RULES FOR PHILIPPINE RECEIPTS:
 - Skip store names, addresses, dates, times, receipt numbers, cashier names
 - If you see "x2" or "x 3" or "qty: 2", that's the quantity
 - The amount should be the UNIT price, not the line total
-- If unsure about category, use "General"
+- If unsure about category, use the last category in the available list (usually "General")
 - If you cannot clearly identify items, return empty array []
 - DO NOT include items that look like: TOTAL, SUBTOTAL, CHANGE, CASH, PAYMENT, TAX, VAT, DISCOUNT
 - Return ONLY valid JSON array, no markdown code blocks, no explanations, no other text
@@ -607,11 +641,17 @@ If no items found or image is unclear, return: []`;
     if (items && items.length > 0) {
       const newExpenses: ExpenseItem[] = items.map((item: any) => ({
         id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        category: item.category || "General",
+        // Re-categorize using the business-type engine so AI category is
+        // overridden when the business context demands a different bucket.
+        category:
+          categorizeItemForBusiness(item.title || "", user?.businessType) ||
+          item.category ||
+          "General",
         title: item.title || "Unknown Item",
         amount: parseFloat(item.amount || 0).toFixed(2),
         quantity: (item.quantity || 1).toString(),
         total: (parseFloat(item.amount || 0) * (item.quantity || 1)).toFixed(2),
+        isOcrSource: true, // Lock fields – scanned data must not be edited
       }));
 
       setExpenses(newExpenses);
@@ -632,188 +672,9 @@ If no items found or image is unclear, return: []`;
       .filter((line) => line.length > 0);
     const newExpenses: ExpenseItem[] = [];
 
-    // Enhanced categorization keywords
-    const categoryKeywords: Record<string, string[]> = {
-      "Raw Materials": [
-        "raw",
-        "material",
-        "ingredient",
-        "flour",
-        "sugar",
-        "salt",
-        "oil",
-        "meat",
-        "fish",
-        "vegetable",
-        "fruit",
-        "grain",
-        "spice",
-        "seasoning",
-        "fresh",
-        "produce",
-        "poultry",
-        "beef",
-        "pork",
-        "chicken",
-        "seafood",
-        "dairy",
-        "egg",
-        "milk",
-        "cheese",
-        "butter",
-        "rice",
-        "wheat",
-        "corn",
-        "beans",
-      ],
-      "Packaging Materials": [
-        "packaging",
-        "package",
-        "box",
-        "container",
-        "bag",
-        "plastic",
-        "wrapper",
-        "carton",
-        "bottle",
-        "can",
-        "jar",
-        "pouch",
-        "foil",
-        "cellophane",
-        "paper bag",
-        "styrofoam",
-        "cup",
-        "lid",
-        "straw",
-        "tissue",
-        "napkin",
-        "tape",
-        "label",
-        "sticker",
-        "seal",
-      ],
-      "Store Supplies": [
-        "supplies",
-        "store",
-        "shop",
-        "cleaning",
-        "detergent",
-        "soap",
-        "mop",
-        "broom",
-        "brush",
-        "sponge",
-        "towel",
-        "gloves",
-        "apron",
-        "uniform",
-        "pen",
-        "paper",
-        "notebook",
-        "receipt",
-        "calculator",
-        "stapler",
-        "scissors",
-        "tape",
-        "marker",
-        "office",
-        "sanitizer",
-        "disinfectant",
-        "bleach",
-      ],
-      Utilities: [
-        "electricity",
-        "water",
-        "bill",
-        "internet",
-        "phone",
-        "cable",
-        "wifi",
-        "utility",
-        "electric",
-        "pldt",
-        "smart",
-        "globe",
-        "meralco",
-        "maynilad",
-        "manila water",
-        "converge",
-        "sky",
-        "cignal",
-        "kwh",
-        "kilowatt",
-        "consumption",
-      ],
-      Equipment: [
-        "equipment",
-        "machine",
-        "device",
-        "appliance",
-        "refrigerator",
-        "oven",
-        "microwave",
-        "blender",
-        "mixer",
-        "fan",
-        "aircon",
-        "ac",
-        "freezer",
-        "stove",
-        "grill",
-        "fryer",
-        "cutter",
-        "slicer",
-        "scale",
-        "register",
-        "pos",
-        "tools",
-        "hardware",
-      ],
-      Transportation: [
-        "gas",
-        "gasoline",
-        "fuel",
-        "diesel",
-        "taxi",
-        "uber",
-        "grab",
-        "bus",
-        "train",
-        "parking",
-        "toll",
-        "car",
-        "motorcycle",
-        "jeep",
-        "tricycle",
-        "petron",
-        "shell",
-        "caltex",
-        "phoenix",
-        "seaoil",
-        "fare",
-        "transpo",
-        "vehicle",
-        "motor",
-        "oil",
-        "liter",
-        "litre",
-        "delivery",
-        "shipping",
-      ],
-    };
-
-    // Function to categorize based on keywords
-    const categorizeItem = (itemText: string): string => {
-      const lowercaseText = itemText.toLowerCase();
-
-      for (const [category, keywords] of Object.entries(categoryKeywords)) {
-        if (keywords.some((keyword) => lowercaseText.includes(keyword))) {
-          return category;
-        }
-      }
-      return "General"; // Default category
-    };
+    // Use the business-type-aware engine for fallback categorization
+    const categorizeItem = (itemText: string): string =>
+      categorizeItemForBusiness(itemText, user?.businessType);
 
     // Skip words - lines containing these are not items
     const skipPatterns = [
@@ -1100,6 +961,7 @@ If no items found or image is unclear, return: []`;
             amount: amount.toFixed(2),
             quantity: quantity.toString(),
             total: total,
+            isOcrSource: true, // Lock fields – scanned data must not be edited
           });
         } else {
           console.log(
@@ -1215,10 +1077,16 @@ If no items found or image is unclear, return: []`;
       {/* Content */}
       <View style={styles.contentContainer}>
         {/* Date Display */}
-        <View style={styles.dateContainer}>
+        <TouchableOpacity
+          style={styles.dateContainer}
+          onPress={() => setShowDatePicker(true)}
+        >
           <Text style={styles.dateLabel}>Date</Text>
-          <Text style={styles.dateValue}>{getCurrentDate()}</Text>
-        </View>
+          <View style={styles.dateValueRow}>
+            <Text style={styles.dateValue}>{getCurrentDate()}</Text>
+            <Calendar size={16} color={COLORS.primaryBlue} />
+          </View>
+        </TouchableOpacity>
 
         {/* Scrollable Expense Items */}
         <ScrollView
@@ -1227,7 +1095,13 @@ If no items found or image is unclear, return: []`;
           contentContainerStyle={styles.scrollContent}
         >
           {expenses.map((item, index) => (
-            <View key={item.id} style={styles.expenseCard}>
+            <View
+              key={item.id}
+              style={[
+                styles.expenseCard,
+                item.isOcrSource && styles.expenseCardOcr,
+              ]}
+            >
               {/* Remove Button */}
               {expenses.length > 1 && (
                 <TouchableOpacity
@@ -1238,7 +1112,19 @@ If no items found or image is unclear, return: []`;
                 </TouchableOpacity>
               )}
 
-              {/* Category Dropdown */}
+              {/* OCR Badge */}
+              {item.isOcrSource && (
+                <View style={styles.ocrBadgeRow}>
+                  <Lock size={12} color={COLORS.primaryBlue} />
+                  <Text style={styles.ocrBadgeText}>
+                    Scanned via OCR — fields are locked to preserve data
+                    integrity. To make corrections, rescan or create a new
+                    manual entry.
+                  </Text>
+                </View>
+              )}
+
+              {/* Category Dropdown (always editable) */}
               <Text style={styles.inputLabel}>Category</Text>
               <TouchableOpacity
                 style={styles.dropdownInput}
@@ -1256,12 +1142,30 @@ If no items found or image is unclear, return: []`;
               </TouchableOpacity>
 
               {/* Expense Title */}
-              <Text style={styles.inputLabel}>Expense Title</Text>
+              <View style={styles.labelRow}>
+                <Text style={styles.inputLabel}>Expense Title</Text>
+                {!item.isOcrSource && item.category ? (
+                  <Text style={styles.autoCategoryHint}>
+                    Auto-categorized ↓
+                  </Text>
+                ) : null}
+                {item.isOcrSource && (
+                  <Lock
+                    size={12}
+                    color={COLORS.textGray}
+                    style={{ marginLeft: 4 }}
+                  />
+                )}
+              </View>
               <TextInput
-                style={styles.textInput}
+                style={[
+                  styles.textInput,
+                  item.isOcrSource && styles.lockedInput,
+                ]}
                 placeholder="Enter expense title"
                 placeholderTextColor={COLORS.textGray}
                 value={item.title}
+                editable={!item.isOcrSource}
                 onChangeText={(value) =>
                   updateExpenseItem(item.id, "title", value)
                 }
@@ -1270,13 +1174,26 @@ If no items found or image is unclear, return: []`;
               {/* Amount and Quantity Row */}
               <View style={styles.row}>
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Amount</Text>
+                  <View style={styles.labelRow}>
+                    <Text style={styles.inputLabel}>Amount</Text>
+                    {item.isOcrSource && (
+                      <Lock
+                        size={12}
+                        color={COLORS.textGray}
+                        style={{ marginLeft: 4 }}
+                      />
+                    )}
+                  </View>
                   <TextInput
-                    style={styles.textInput}
+                    style={[
+                      styles.textInput,
+                      item.isOcrSource && styles.lockedInput,
+                    ]}
                     placeholder="0.00"
                     placeholderTextColor={COLORS.textGray}
                     keyboardType="decimal-pad"
                     value={item.amount}
+                    editable={!item.isOcrSource}
                     onChangeText={(value) =>
                       updateExpenseItem(item.id, "amount", value)
                     }
@@ -1284,13 +1201,26 @@ If no items found or image is unclear, return: []`;
                 </View>
 
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Quantity</Text>
+                  <View style={styles.labelRow}>
+                    <Text style={styles.inputLabel}>Quantity</Text>
+                    {item.isOcrSource && (
+                      <Lock
+                        size={12}
+                        color={COLORS.textGray}
+                        style={{ marginLeft: 4 }}
+                      />
+                    )}
+                  </View>
                   <TextInput
-                    style={styles.textInput}
+                    style={[
+                      styles.textInput,
+                      item.isOcrSource && styles.lockedInput,
+                    ]}
                     placeholder="0"
                     placeholderTextColor={COLORS.textGray}
                     keyboardType="number-pad"
                     value={item.quantity}
+                    editable={!item.isOcrSource}
                     onChangeText={(value) =>
                       updateExpenseItem(item.id, "quantity", value)
                     }
@@ -1400,7 +1330,7 @@ If no items found or image is unclear, return: []`;
             </View>
 
             <ScrollView style={styles.categoryList}>
-              {EXPENSE_CATEGORIES.map((category) => (
+              {expenseCategories.map((category) => (
                 <TouchableOpacity
                   key={category}
                   style={styles.categoryItem}
@@ -1412,6 +1342,60 @@ If no items found or image is unclear, return: []`;
             </ScrollView>
           </View>
         </View>
+      </Modal>
+
+      {/* Date Picker */}
+      {showDatePicker && Platform.OS === "android" && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display="default"
+          maximumDate={new Date()}
+          onChange={(event: DateTimePickerEvent, date?: Date) => {
+            setShowDatePicker(false);
+            if (event.type === "set" && date) setSelectedDate(date);
+          }}
+        />
+      )}
+      <Modal
+        visible={showDatePicker && Platform.OS === "ios"}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowDatePicker(false)}
+        >
+          <View
+            style={styles.datePickerModalContent}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Date</Text>
+              <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                <X size={24} color={COLORS.textGray} />
+              </TouchableOpacity>
+            </View>
+            <DateTimePicker
+              value={selectedDate}
+              mode="date"
+              display="spinner"
+              maximumDate={new Date()}
+              onChange={(_: DateTimePickerEvent, date?: Date) => {
+                if (date) setSelectedDate(date);
+              }}
+              style={{ alignSelf: "center" }}
+            />
+            <TouchableOpacity
+              style={styles.applyDateButton}
+              onPress={() => setShowDatePicker(false)}
+            >
+              <Text style={styles.applyDateButtonText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
 
       {/* Scanning Animation Modal */}
@@ -1555,6 +1539,11 @@ const styles = StyleSheet.create({
   dateValue: {
     fontSize: 14,
     color: COLORS.textGray,
+  },
+  dateValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
 
   // Scroll
@@ -2032,5 +2021,102 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.textGray,
     textTransform: "uppercase",
+  },
+  // Date Picker Modal
+  datePickerModalContent: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  datePickerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 20,
+    paddingHorizontal: 10,
+  },
+  dateNavButton: {
+    padding: 10,
+  },
+  dateNavButtonText: {
+    fontSize: 20,
+    color: COLORS.primaryBlue,
+    fontWeight: "700",
+  },
+  selectedDateText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: COLORS.textDark,
+  },
+  quickDateButtons: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+  quickDateButton: {
+    flex: 1,
+    backgroundColor: COLORS.lightBlueBg,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  quickDateButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.primaryBlue,
+  },
+  applyDateButton: {
+    backgroundColor: COLORS.primaryBlue,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 20,
+  },
+  applyDateButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+
+  // ── OCR-locked card styles ────────────────────────────────────────────────
+  expenseCardOcr: {
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.primaryBlue,
+  },
+  ocrBadgeRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#eef4fb",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 14,
+    gap: 6,
+  },
+  ocrBadgeText: {
+    flex: 1,
+    fontSize: 11,
+    color: COLORS.primaryBlue,
+    lineHeight: 16,
+  },
+  lockedInput: {
+    backgroundColor: "#f3f4f6",
+    color: "#6b7280",
+  },
+
+  // ── Label row (label + inline icon/hint) ─────────────────────────────────
+  labelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    // marginTop/Bottom intentionally omitted here; the inputLabel inside
+    // the row already carries marginTop: 12 and marginBottom: 8 which
+    // propagate through the flex layout correctly.
+  },
+  autoCategoryHint: {
+    marginLeft: 6,
+    fontSize: 10,
+    color: COLORS.primaryBlue,
+    fontWeight: "600",
   },
 });

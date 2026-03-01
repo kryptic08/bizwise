@@ -32,8 +32,8 @@ import Svg, {
   Polygon,
   Stop,
 } from "react-native-svg";
-import { useAuth } from "../context/AuthContext";
 import { OfflineIndicator } from "../components/OfflineIndicator";
+import { useAuth } from "../context/AuthContext";
 import {
   useDailyAnalytics,
   useFinancialSummary,
@@ -96,7 +96,6 @@ export default function HomeScreen() {
     return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
   };
 
-  // Fetch financial data with offline caching
   const { data: financialSummary } = useFinancialSummary(user?.userId);
   const { data: dailyAnalytics } = useDailyAnalytics(user?.userId, 7);
   const { data: weeklyAnalytics } = useWeeklyAnalytics(user?.userId, 7);
@@ -104,6 +103,25 @@ export default function HomeScreen() {
   const { data: topProduct } = useTopProduct(user?.userId);
   const { data: topCategory } = useTopCategory(user?.userId);
   const { data: targetProgress } = useTargetProgress(user?.userId);
+
+  // Calculate today's sales and expenses from daily analytics
+  const todayTotals = useMemo(() => {
+    // Use UTC date directly – sales are stored with UTC dates via toISOString()
+    // Do NOT call setHours(0,0,0,0) before toISOString(): that converts local
+    // midnight to UTC, giving the wrong date for UTC+8 users all day long.
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    if (!dailyAnalytics) return { sales: 0, expenses: 0 };
+
+    const todayData = dailyAnalytics.find(
+      (day: { date: string }) => day.date === todayStr,
+    );
+
+    return {
+      sales: todayData ? todayData.income : 0,
+      expenses: todayData ? todayData.expense : 0,
+    };
+  }, [dailyAnalytics]);
 
   // Check target progress and trigger notifications
   useEffect(() => {
@@ -146,47 +164,88 @@ export default function HomeScreen() {
     return Math.ceil((firstWeekDay + totalDays) / 7);
   };
 
+  // Helper to get current week boundaries
+  const getCurrentWeekDays = () => {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - dayOfWeek);
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const days: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const day = new Date(startOfWeek);
+      day.setDate(startOfWeek.getDate() + i);
+      days.push(
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day.getDay()],
+      );
+    }
+    return { days, startOfWeek };
+  };
+
   // Format the analytics based on active tab
   const chartData = useMemo(() => {
-    let rawData: Array<{ day: string; income: number; expense: number }> = [];
+    let rawData: Array<{ day: string; sales: number; expense: number }> = [];
+    const { days: weekDays, startOfWeek } = getCurrentWeekDays();
 
     if (activeTab === "Daily") {
       if (!dailyAnalytics) return INCOME_EXPENSE_DATA;
-      rawData = dailyAnalytics.slice(-7).map((day: { date: string; income: number; expense: number }) => ({
-        day: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
-          new Date(day.date).getDay()
-        ],
-        income: day.income,
-        expense: day.expense,
+      // Filter to only current week
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+      // Build a lookup from analytics for this week
+      const dataMap: Record<string, { sales: number; expense: number }> = {};
+      dailyAnalytics
+        .filter((day: { date: string }) => {
+          const dayDate = new Date(day.date);
+          return dayDate >= startOfWeek && dayDate <= endOfWeek;
+        })
+        .forEach((day: { date: string; income: number; expense: number }) => {
+          const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+            new Date(day.date).getDay()
+          ];
+          dataMap[dayName] = { sales: day.income, expense: day.expense };
+        });
+
+      // Always show all 7 days Sun-Sat with 0 for missing days
+      rawData = weekDays.map((dayName) => ({
+        day: dayName,
+        sales: dataMap[dayName]?.sales ?? 0,
+        expense: dataMap[dayName]?.expense ?? 0,
       }));
     } else if (activeTab === "Weekly") {
       if (!weeklyAnalytics) return INCOME_EXPENSE_DATA;
       const weeksInMonth = getWeeksInCurrentMonth();
-      rawData = weeklyAnalytics.slice(-weeksInMonth).map((week: { income: number; expense: number }, index: number) => ({
-        day: `W${index + 1}`,
-        income: week.income,
-        expense: week.expense,
-      }));
+      rawData = weeklyAnalytics
+        .slice(-weeksInMonth)
+        .map((week: { income: number; expense: number }, index: number) => ({
+          day: `W${index + 1}`,
+          sales: week.income,
+          expense: week.expense,
+        }));
     } else {
       // Monthly - show all 12 months
       if (!monthlyAnalytics) return INCOME_EXPENSE_DATA.slice(0, 6);
-      rawData = monthlyAnalytics.map((month: { month: string; income: number; expense: number }) => ({
-        day: month.month.substring(0, 3),
-        income: month.income,
-        expense: month.expense,
-      }));
+      rawData = monthlyAnalytics.map(
+        (month: { month: string; income: number; expense: number }) => ({
+          day: month.month.substring(0, 3),
+          sales: month.income,
+          expense: month.expense,
+        }),
+      );
     }
 
     // Return raw data with actual values (no scaling)
     return rawData.map((d) => ({
       day: d.day,
-      inc: d.income,
+      inc: d.sales,
       exp: d.expense,
     }));
   }, [activeTab, dailyAnalytics, weeklyAnalytics, monthlyAnalytics]);
 
-  // Calculate max value for income/expense chart Y-axis
-  const incomeExpenseMaxValue = useMemo(() => {
+  // Calculate max value for sales/expense chart Y-axis
+  const salesExpenseMaxValue = useMemo(() => {
     const maxValue = Math.max(
       ...chartData.map((d) => Math.max(d.inc, d.exp)),
       1,
@@ -201,9 +260,18 @@ export default function HomeScreen() {
     return Math.max(roundedMax, 1500);
   }, [chartData]);
 
-  // Y-axis labels for income/expense chart
-  const incomeExpenseYLabels = useMemo(() => {
-    const max = incomeExpenseMaxValue;
+  // Totals for the currently visible chart period (Daily = this week, Weekly = this month, Monthly = this year)
+  const periodTotals = useMemo(
+    () => ({
+      sales: (chartData ?? []).reduce((sum, d) => sum + d.inc, 0),
+      expenses: (chartData ?? []).reduce((sum, d) => sum + d.exp, 0),
+    }),
+    [chartData],
+  );
+
+  // Y-axis labels for sales/expense chart
+  const salesExpenseYLabels = useMemo(() => {
+    const max = salesExpenseMaxValue;
     const step = max / 4;
     return [
       max,
@@ -212,25 +280,51 @@ export default function HomeScreen() {
       Math.round(max * 0.25),
       0,
     ];
-  }, [incomeExpenseMaxValue]);
+  }, [salesExpenseMaxValue]);
 
   // Format profit data based on active tab
   const profitChartData = useMemo(() => {
     let profits: number[] = [];
+    const { days: weekDays, startOfWeek } = getCurrentWeekDays();
 
     if (activeTab === "Daily") {
       if (!dailyAnalytics) return PROFIT_DATA;
-      profits = dailyAnalytics.slice(-7).map((day: { income: number; expense: number }) => day.income - day.expense);
+      // Filter to only current week
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+      // Build a lookup for this week
+      const dataMap: Record<string, number> = {};
+      dailyAnalytics
+        .filter((day: { date: string }) => {
+          const dayDate = new Date(day.date);
+          return dayDate >= startOfWeek && dayDate <= endOfWeek;
+        })
+        .forEach((day: { date: string; income: number; expense: number }) => {
+          const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+            new Date(day.date).getDay()
+          ];
+          dataMap[dayName] = day.income - day.expense;
+        });
+
+      // Always show all 7 days Sun-Sat with 0 for missing days
+      profits = weekDays.map((dayName) => dataMap[dayName] ?? 0);
     } else if (activeTab === "Weekly") {
       if (!weeklyAnalytics) return PROFIT_DATA;
       const weeksInMonth = getWeeksInCurrentMonth();
       profits = weeklyAnalytics
         .slice(-weeksInMonth)
-        .map((week: { income: number; expense: number }) => week.income - week.expense);
+        .map(
+          (week: { income: number; expense: number }) =>
+            week.income - week.expense,
+        );
     } else {
       // Monthly - show all 12 months
       if (!monthlyAnalytics) return PROFIT_DATA.slice(0, 6);
-      profits = monthlyAnalytics.map((month: { income: number; expense: number }) => month.income - month.expense);
+      profits = monthlyAnalytics.map(
+        (month: { income: number; expense: number }) =>
+          month.income - month.expense,
+      );
     }
 
     return profits;
@@ -261,6 +355,54 @@ export default function HomeScreen() {
     return Math.floor(minValue / 500) * 500;
   }, [profitChartData]);
 
+  // Calculate total profit for different time periods
+  const periodProfit = useMemo(() => {
+    const { startOfWeek } = getCurrentWeekDays();
+
+    if (activeTab === "Daily") {
+      // Current week profit
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+      if (!dailyAnalytics) return 0;
+      return dailyAnalytics
+        .filter((day: { date: string }) => {
+          const dayDate = new Date(day.date);
+          return dayDate >= startOfWeek && dayDate <= endOfWeek;
+        })
+        .reduce(
+          (sum, day: { income: number; expense: number }) =>
+            sum + (day.income - day.expense),
+          0,
+        );
+    } else if (activeTab === "Weekly") {
+      // Current month profit
+      if (!weeklyAnalytics) return 0;
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+
+      return weeklyAnalytics
+        .filter((_: any, idx: number) => {
+          // Get the week number in the current month context
+          return true; // Just sum all available weekly data for now
+        })
+        .reduce(
+          (sum, week: { income: number; expense: number }) =>
+            sum + (week.income - week.expense),
+          0,
+        );
+    } else {
+      // Monthly - Current year profit
+      if (!monthlyAnalytics) return 0;
+      return monthlyAnalytics.reduce(
+        (sum, month: { income: number; expense: number }) =>
+          sum + (month.income - month.expense),
+        0,
+      );
+    }
+  }, [activeTab, dailyAnalytics, weeklyAnalytics, monthlyAnalytics]);
+
   // Y-axis labels for profit chart (spans min to max, always includes 0)
   const profitYLabels = useMemo(() => {
     const max = profitMaxValue;
@@ -277,23 +419,19 @@ export default function HomeScreen() {
 
   // Get labels for x-axis based on active tab
   const chartLabels = useMemo(() => {
+    const { days: weekDays, startOfWeek } = getCurrentWeekDays();
+
     if (activeTab === "Daily") {
-      if (!dailyAnalytics)
-        return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-      return dailyAnalytics
-        .slice(-7)
-        .map(
-          (day: { date: string }) =>
-            ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
-              new Date(day.date).getDay()
-            ],
-        );
+      // Always show all 7 days Sun-Sat
+      return weekDays;
     } else if (activeTab === "Weekly") {
       const weeksInMonth = getWeeksInCurrentMonth();
       return Array.from({ length: weeksInMonth }, (_, i) => `W${i + 1}`);
     } else {
       return monthlyAnalytics
-        ? monthlyAnalytics.map((m: { month: string }) => m.month.substring(0, 3))
+        ? monthlyAnalytics.map((m: { month: string }) =>
+            m.month.substring(0, 3),
+          )
         : ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
     }
   }, [activeTab, dailyAnalytics, monthlyAnalytics]);
@@ -331,8 +469,10 @@ export default function HomeScreen() {
 
       // Only show percentage if both periods have meaningful profit (>= 500)
       const minThreshold = 500;
-      const showPercentage = Math.abs(firstAvg) >= minThreshold && Math.abs(secondAvg) >= minThreshold;
-      
+      const showPercentage =
+        Math.abs(firstAvg) >= minThreshold &&
+        Math.abs(secondAvg) >= minThreshold;
+
       // Calculate growth rate if meaningful
       let growthRate: number | null = null;
       if (showPercentage && firstAvg !== 0) {
@@ -343,9 +483,10 @@ export default function HomeScreen() {
       }
 
       // Format absolute change for display
-      const changeText = absoluteChange >= 0 
-        ? `+₱${Math.abs(Math.round(absoluteChange)).toLocaleString()}`
-        : `-₱${Math.abs(Math.round(absoluteChange)).toLocaleString()}`;
+      const changeText =
+        absoluteChange >= 0
+          ? `+₱${Math.abs(Math.round(absoluteChange)).toLocaleString()}`
+          : `-₱${Math.abs(Math.round(absoluteChange)).toLocaleString()}`;
 
       // Generate insights based on absolute change and/or percentage
       if (growthRate !== null) {
@@ -391,7 +532,7 @@ export default function HomeScreen() {
   }, [profitChartData]);
 
   // Generate dynamic income/expense analysis text
-  const incomeExpenseAnalysisText = useMemo(() => {
+  const salesExpenseAnalysisText = useMemo(() => {
     // Check if data is empty (all zeros)
     if (chartData.every((d) => d.inc === 0 && d.exp === 0)) {
       return ""; // No text for empty graph
@@ -442,12 +583,17 @@ export default function HomeScreen() {
 
     // Generate insights with realistic percentages
     const realisticProfitMargin = Math.min(Math.max(profitMargin, -100), 100);
-    
+
     // Format income trend text
-    const incomeTrendText = incomeGrowth !== null 
-      ? (incomeGrowth > 5 ? "growing" : incomeGrowth < -5 ? "declining" : "stable")
-      : "";
-    
+    const incomeTrendText =
+      incomeGrowth !== null
+        ? incomeGrowth > 5
+          ? "growing"
+          : incomeGrowth < -5
+            ? "declining"
+            : "stable"
+        : "";
+
     if (realisticProfitMargin > 50) {
       return `🌟 Excellent financial control! ${Math.round(realisticProfitMargin)}% profit margin with well-managed expenses.`;
     } else if (realisticProfitMargin > 30) {
@@ -529,45 +675,41 @@ export default function HomeScreen() {
           <View style={styles.balanceRow}>
             <Pressable
               style={styles.card}
-              onPress={() => handleCardPress("balance")}
+              onPress={() => router.push("/(tabs)/transactions")}
               android_ripple={{ color: "rgba(59, 110, 165, 0.1)" }}
             >
               <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
                 <View style={styles.cardHeader}>
                   <Wallet size={14} color={COLORS.textGray} />
-                  <Text style={styles.cardLabel}> Total Balance</Text>
+                  <Text style={styles.cardLabel}> Sales</Text>
                 </View>
                 <Text
                   style={[styles.amountText, { color: COLORS.primaryBlue }]}
                 >
                   ₱
-                  {financialSummary
-                    ? financialSummary.totalBalance.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })
-                    : "0.00"}
+                  {todayTotals.sales.toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
                 </Text>
               </Animated.View>
             </Pressable>
             <Pressable
               style={styles.card}
-              onPress={() => handleCardPress("expense")}
+              onPress={() => router.push("/(tabs)/transactions")}
               android_ripple={{ color: "rgba(59, 110, 165, 0.1)" }}
             >
               <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
                 <View style={styles.cardHeader}>
                   <Receipt size={14} color={COLORS.textGray} />
-                  <Text style={styles.cardLabel}> Total Expense</Text>
+                  <Text style={styles.cardLabel}> Expenses</Text>
                 </View>
                 <Text style={[styles.amountText, { color: COLORS.textDark }]}>
                   ₱
-                  {financialSummary
-                    ? financialSummary.totalExpense.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })
-                    : "0.00"}
+                  {todayTotals.expenses.toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
                 </Text>
               </Animated.View>
             </Pressable>
@@ -583,7 +725,11 @@ export default function HomeScreen() {
                 <Text style={styles.highlightLabel}>Top selling product</Text>
                 <Text style={styles.highlightValue}>
                   {topProduct?.name
-                    ? toSentenceCase(topProduct.name)
+                    ? topProduct.name.toLowerCase().includes("add-on") ||
+                      topProduct.name.toLowerCase().includes("takeout") ||
+                      topProduct.name.toLowerCase().includes("fee")
+                      ? "No sales yet"
+                      : toSentenceCase(topProduct.name)
                     : "No sales yet"}
                 </Text>
               </View>
@@ -597,7 +743,11 @@ export default function HomeScreen() {
                 <Text style={styles.highlightLabel}>Top selling category</Text>
                 <Text style={styles.highlightValue}>
                   {topCategory?.name
-                    ? toSentenceCase(topCategory.name)
+                    ? topCategory.name.toLowerCase().includes("add-on") ||
+                      topCategory.name.toLowerCase().includes("takeout") ||
+                      topCategory.name.toLowerCase().includes("fee")
+                      ? "No sales yet"
+                      : toSentenceCase(topCategory.name)
                     : "No sales yet"}
                 </Text>
               </View>
@@ -958,16 +1108,21 @@ export default function HomeScreen() {
             {/* Profit Summary */}
             <View style={styles.profitSummary}>
               <Coins color={COLORS.primaryBlue} size={24} />
-              <Text style={styles.profitLabel}> Total Profit</Text>
+              <Text style={styles.profitLabel}>
+                {" "}
+                {activeTab === "Daily"
+                  ? "Week Profit"
+                  : activeTab === "Weekly"
+                    ? "Month Profit"
+                    : "Year Profit"}
+              </Text>
               <Text style={styles.profitValue}>
                 {" "}
                 ₱
-                {financialSummary
-                  ? financialSummary.profit.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })
-                  : "0.00"}
+                {periodProfit.toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
               </Text>
             </View>
             {profitAnalysisText && (
@@ -975,10 +1130,10 @@ export default function HomeScreen() {
             )}
           </View>
 
-          {/* Income & Expenses Section */}
+          {/* Sales & Expenses Section */}
           <View style={styles.chartCard}>
             <View style={styles.chartHeader}>
-              <Text style={styles.chartTitle}>Income & Expenses</Text>
+              <Text style={styles.chartTitle}>Sales & Expenses</Text>
               <View style={{ flexDirection: "row", gap: 12 }}>
                 <View style={styles.chartLegend}>
                   <View
@@ -987,7 +1142,7 @@ export default function HomeScreen() {
                       { backgroundColor: COLORS.green },
                     ]}
                   />
-                  <Text style={styles.legendText}>Income</Text>
+                  <Text style={styles.legendText}>Sales</Text>
                 </View>
                 <View style={styles.chartLegend}>
                   <View
@@ -1000,7 +1155,7 @@ export default function HomeScreen() {
 
             <View style={styles.graphContainer}>
               <View style={styles.yAxis}>
-                {incomeExpenseYLabels.map((label, i) => (
+                {salesExpenseYLabels.map((label, i) => (
                   <Text key={i} style={styles.axisText}>
                     {formatYLabel(label)}
                   </Text>
@@ -1021,13 +1176,13 @@ export default function HomeScreen() {
                 style={styles.scrollPlot}
               >
                 <View style={styles.plotArea}>
-                  {incomeExpenseYLabels.map((_, i) => (
+                  {salesExpenseYLabels.map((_, i) => (
                     <View
                       key={i}
                       style={[
                         styles.gridLine,
                         {
-                          bottom: (i / (incomeExpenseYLabels.length - 1)) * 150,
+                          bottom: (i / (salesExpenseYLabels.length - 1)) * 150,
                         },
                       ]}
                     />
@@ -1049,7 +1204,7 @@ export default function HomeScreen() {
                               {
                                 height: Math.max(
                                   2,
-                                  (item.inc / incomeExpenseMaxValue) * 140,
+                                  (item.inc / salesExpenseMaxValue) * 140,
                                 ),
                                 backgroundColor: COLORS.green,
                               },
@@ -1061,7 +1216,7 @@ export default function HomeScreen() {
                               {
                                 height: Math.max(
                                   2,
-                                  (item.exp / incomeExpenseMaxValue) * 140,
+                                  (item.exp / salesExpenseMaxValue) * 140,
                                 ),
                                 backgroundColor: COLORS.red,
                               },
@@ -1076,21 +1231,19 @@ export default function HomeScreen() {
               </ScrollView>
             </View>
 
-            {/* Income/Expense Totals */}
+            {/* Sales/Expense Totals */}
             <View style={styles.totalsRow}>
               <View style={styles.totalItem}>
                 <View style={styles.iconBoxGreen}>
                   <ArrowUpRight color={COLORS.green} size={20} />
                 </View>
-                <Text style={styles.totalLabel}>Income</Text>
+                <Text style={styles.totalLabel}>Sales</Text>
                 <Text style={styles.totalValueGreen}>
                   ₱
-                  {financialSummary
-                    ? financialSummary.totalIncome.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })
-                    : "0.00"}
+                  {periodTotals.sales.toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
                 </Text>
               </View>
 
@@ -1101,19 +1254,17 @@ export default function HomeScreen() {
                 <Text style={styles.totalLabel}>Expense</Text>
                 <Text style={styles.totalValueRed}>
                   ₱
-                  {financialSummary
-                    ? financialSummary.totalExpense.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })
-                    : "0.00"}
+                  {periodTotals.expenses.toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
                 </Text>
               </View>
             </View>
 
-            {incomeExpenseAnalysisText && (
+            {salesExpenseAnalysisText && (
               <Text style={styles.analysisTextCentered}>
-                {incomeExpenseAnalysisText}
+                {salesExpenseAnalysisText}
               </Text>
             )}
           </View>

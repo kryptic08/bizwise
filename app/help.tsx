@@ -42,7 +42,7 @@ const FAQ_DATA = [
     id: 4,
     question: "How can I delete my account",
     answer:
-      "To delete your account, go to Profile > Settings > Delete Account. Please note that this action is permanent and will delete all your data including expenses, income, and transactions. You'll need to enter your password to confirm.",
+      "To delete your account, go to Profile > Settings > Delete Account. Please note that this action is permanent and will delete all your data including expenses, sales, and transactions. You'll need to enter your password to confirm.",
   },
   {
     id: 5,

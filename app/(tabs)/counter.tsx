@@ -1,11 +1,23 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
+import DateTimePicker, {
+  DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import { useMutation } from "convex/react";
 import { useRouter } from "expo-router";
-import { ArrowLeft, Pencil, Plus, Settings } from "lucide-react-native";
+import {
+  ArrowLeft,
+  Calendar,
+  Pencil,
+  Plus,
+  Settings,
+  X,
+} from "lucide-react-native";
 import React, { useMemo, useState } from "react";
 import {
   Dimensions,
   Image,
+  Modal,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -14,8 +26,8 @@ import {
   View,
 } from "react-native";
 import { api } from "../../convex/_generated/api";
-import { useAuth } from "../context/AuthContext";
 import { OfflineIndicator } from "../components/OfflineIndicator";
+import { useAuth } from "../context/AuthContext";
 import { useCategories, useProducts } from "../hooks/useOfflineQueries";
 
 const { width } = Dimensions.get("window");
@@ -46,6 +58,12 @@ interface Product {
 export default function CounterScreen() {
   const router = useRouter();
   const { user } = useAuth();
+
+  // Date state - default to today
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [selectedDate, setSelectedDate] = useState<Date>(today);
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   // Fetch products and categories with offline caching
   const { data: allProducts } = useProducts(user?.userId);
@@ -84,10 +102,19 @@ export default function CounterScreen() {
       qty: number;
     }
 
-    const productsWithQty: ProductWithQty[] = allProducts.map((product: { _id: string; name: string; price: number; image: string; category: string; categoryId: string }) => ({
-      ...product,
-      qty: quantities[product._id] || 0,
-    }));
+    const productsWithQty: ProductWithQty[] = allProducts.map(
+      (product: {
+        _id: string;
+        name: string;
+        price: number;
+        image: string;
+        category: string;
+        categoryId: string;
+      }) => ({
+        ...product,
+        qty: quantities[product._id] || 0,
+      }),
+    );
 
     // Group products by categoryId
     const grouped: Record<string, ProductWithQty[]> = {};
@@ -220,7 +247,19 @@ export default function CounterScreen() {
         >
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Sales Entry</Text>
+        <TouchableOpacity
+          style={styles.dateButton}
+          onPress={() => setShowDatePicker(true)}
+        >
+          <Calendar color={COLORS.white} size={18} />
+          <Text style={styles.dateText}>
+            {selectedDate.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </Text>
+        </TouchableOpacity>
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={styles.iconButton}
@@ -306,7 +345,16 @@ export default function CounterScreen() {
             const totalItems = getTotalItems();
             if (totalItems > 0 && allProducts) {
               const cartItems = allProducts
-                .map((p: { _id: string; name: string; price: number; image: string; category: string; categoryId: string }) => ({ ...p, qty: quantities[p._id] || 0 }))
+                .map(
+                  (p: {
+                    _id: string;
+                    name: string;
+                    price: number;
+                    image: string;
+                    category: string;
+                    categoryId: string;
+                  }) => ({ ...p, qty: quantities[p._id] || 0 }),
+                )
                 .filter((item: { qty: number }) => item.qty > 0);
 
               router.push({
@@ -323,6 +371,60 @@ export default function CounterScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {/* Date Picker */}
+      {showDatePicker && Platform.OS === "android" && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display="default"
+          maximumDate={new Date()}
+          onChange={(event: DateTimePickerEvent, date?: Date) => {
+            setShowDatePicker(false);
+            if (event.type === "set" && date) setSelectedDate(date);
+          }}
+        />
+      )}
+      <Modal
+        visible={showDatePicker && Platform.OS === "ios"}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowDatePicker(false)}
+        >
+          <View
+            style={styles.modalContent}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Date</Text>
+              <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                <X size={24} color={COLORS.textGray} />
+              </TouchableOpacity>
+            </View>
+            <DateTimePicker
+              value={selectedDate}
+              mode="date"
+              display="spinner"
+              maximumDate={new Date()}
+              onChange={(_: DateTimePickerEvent, date?: Date) => {
+                if (date) setSelectedDate(date);
+              }}
+              style={{ alignSelf: "center" }}
+            />
+            <TouchableOpacity
+              style={styles.applyDateButton}
+              onPress={() => setShowDatePicker(false)}
+            >
+              <Text style={styles.applyDateButtonText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -353,6 +455,20 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     padding: 5,
+  },
+  dateButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  dateText: {
+    color: COLORS.white,
+    fontSize: 14,
+    fontWeight: "600",
   },
   helpCircleBg: {
     backgroundColor: COLORS.white,
@@ -548,6 +664,79 @@ const styles = StyleSheet.create({
   checkoutText: {
     color: COLORS.white,
     fontSize: 14,
+    fontWeight: "700",
+  },
+  // Date Picker Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  datePickerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 20,
+    paddingHorizontal: 10,
+  },
+  dateNavButton: {
+    padding: 10,
+  },
+  dateNavButtonText: {
+    fontSize: 20,
+    color: COLORS.primaryBlue,
+    fontWeight: "700",
+  },
+  selectedDateText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: COLORS.textDark,
+  },
+  quickDateButtons: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+  quickDateButton: {
+    flex: 1,
+    backgroundColor: COLORS.lightBlueBg,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  quickDateButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.primaryBlue,
+  },
+  applyDateButton: {
+    backgroundColor: COLORS.primaryBlue,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 20,
+  },
+  applyDateButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
     fontWeight: "700",
   },
 });

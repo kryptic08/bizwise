@@ -1,4 +1,3 @@
-import { HelpTooltip } from "@/components/HelpTooltip";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
@@ -28,7 +27,11 @@ import {
 } from "react-native";
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
-import { generatePDFReport } from "../utils/pdfGenerator";
+import {
+  generateMonthlyFinancialReportPDF,
+  MonthlyExpenseItem,
+  MonthlySaleItem,
+} from "../utils/pdfGenerator";
 
 // --- Colors ---
 const COLORS = {
@@ -66,41 +69,22 @@ export default function ProfileScreen() {
   const { user, logout } = useAuth();
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showFromMonthPicker, setShowFromMonthPicker] = useState(false);
-  const [showToMonthPicker, setShowToMonthPicker] = useState(false);
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
 
-  // Default: last 12 months
+  // Default: current month
   const now = new Date();
-  const defaultFrom = new Date(now.getFullYear() - 1, now.getMonth(), 1);
-  const [fromMonth, setFromMonth] = useState(defaultFrom.getMonth() + 1);
-  const [fromYear, setFromYear] = useState(defaultFrom.getFullYear());
-  const [toMonth, setToMonth] = useState(now.getMonth() + 1);
-  const [toYear, setToYear] = useState(now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
 
-  // Fetch data for PDF generation
-  const topProduct = useQuery(
-    api.analytics.getTopSellingProduct,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  const topCategory = useQuery(
-    api.analytics.getTopSellingCategory,
-    user?.userId ? { userId: user.userId } : "skip",
-  );
-  // Fetch data for chosen date range
-  const rangeAnalytics = useQuery(
-    api.analytics.getAnalyticsByDateRange,
+  // Monthly report data — fetches only the selected month server-side
+  const monthlyReportData = useQuery(
+    api.analytics.getMonthlyReportData,
     user?.userId
-      ? {
-          userId: user.userId,
-          startMonth: fromMonth,
-          startYear: fromYear,
-          endMonth: toMonth,
-          endYear: toYear,
-        }
+      ? { userId: user.userId, month: selectedMonth, year: selectedYear }
       : "skip",
   );
 
-  // Fetch which months actually have data
+  // Fetch which months actually have data (for month picker greying)
   const dataDateRange = useQuery(
     api.analytics.getDataDateRange,
     user?.userId ? { userId: user.userId } : "skip",
@@ -109,15 +93,8 @@ export default function ProfileScreen() {
   // Helper: check if a given month/year has data
   const monthHasData = (month: number, year: number) => {
     if (!dataDateRange || dataDateRange.monthsWithData.length === 0)
-      return true; // if loading, allow all
-    return dataDateRange.monthsWithData.includes(`${year}-${month}`);
-  };
-
-  // Check if the selected year has any data at all
-  const yearHasAnyData = (year: number) => {
-    if (!dataDateRange || dataDateRange.monthsWithData.length === 0)
       return true;
-    return dataDateRange.monthsWithData.some((m) => m.startsWith(`${year}-`));
+    return dataDateRange.monthsWithData.includes(`${year}-${month}`);
   };
 
   const handleExportPress = () => {
@@ -125,13 +102,10 @@ export default function ProfileScreen() {
   };
 
   const handleGeneratePDF = async () => {
-    // Check if data is still loading
-    if (rangeAnalytics === undefined || topProduct === undefined) {
-      // Data is still loading, don't show error
-      return;
-    }
+    // Data still loading
+    if (monthlyReportData === undefined) return;
 
-    if (!rangeAnalytics || !topProduct) {
+    if (!monthlyReportData) {
       Alert.alert(
         "Error",
         "Unable to generate report. Please try again later.",
@@ -142,32 +116,36 @@ export default function ProfileScreen() {
     setShowDatePicker(false);
     setIsGeneratingPDF(true);
     try {
-      const { summary, monthlyData } = rangeAnalytics;
+      // Map server data → PDF interfaces
+      const sales: MonthlySaleItem[] = monthlyReportData.sales.flatMap((sale) =>
+        sale.items.map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          total: item.subtotal,
+          date: sale.createdAt,
+        })),
+      );
 
-      const dateRange = `${MONTH_NAMES[fromMonth - 1]} ${fromYear} - ${MONTH_NAMES[toMonth - 1]} ${toYear}`;
+      const expenses: MonthlyExpenseItem[] = monthlyReportData.expenses.flatMap(
+        (exp) =>
+          exp.items.map((item) => ({
+            category: item.category,
+            description: item.title,
+            amount: item.total, // line total = price × qty
+            unitPrice: item.amount, // unit price per item
+            quantity: item.quantity,
+            date: exp.createdAt,
+          })),
+      );
 
-      // Build daily chart data from monthly (summary view for PDF daily table)
-      const chartData = monthlyData.slice(-7).map((m) => ({
-        day: m.month,
-        inc: m.income,
-        exp: m.expense,
-      }));
-
-      await generatePDFReport(
-        user?.name || "My Business",
-        user?.name || "Business Owner",
-        dateRange,
-        {
-          totalIncome: summary.totalIncome,
-          totalExpense: summary.totalExpense,
-          profit: summary.profit,
-          productsSold: summary.productsSold,
-          averageTransaction: summary.averageTransaction,
-          topProduct: topProduct?.name || "N/A",
-          topCategory: topCategory?.name || "N/A",
-        },
-        chartData,
-        monthlyData,
+      await generateMonthlyFinancialReportPDF(
+        user?.name || "Owner",
+        user?.businessName || user?.name || "My Business",
+        selectedMonth,
+        selectedYear,
+        sales,
+        expenses,
       );
     } catch (error) {
       console.error("Error generating PDF:", error);
@@ -265,12 +243,7 @@ export default function ProfileScreen() {
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Profile</Text>
-        <TouchableOpacity style={styles.iconButton}>
-          <HelpTooltip
-            title="Profile Help"
-            content="Manage your account settings, update your profile information, change security settings like PIN and password, or contact support. You can also delete your account from the settings page."
-          />
-        </TouchableOpacity>
+        <View style={styles.iconButton} />
       </View>
 
       {/* Main White Sheet Content */}
@@ -354,102 +327,39 @@ export default function ProfileScreen() {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Calendar color={COLORS.primaryBlue} size={22} />
-              <Text style={styles.modalTitle}>Select Report Period</Text>
+              <Text style={styles.modalTitle}>Select Report Month</Text>
               <TouchableOpacity onPress={() => setShowDatePicker(false)}>
                 <X color={COLORS.textGray} size={22} />
               </TouchableOpacity>
             </View>
 
             <Text style={styles.modalSubtitle}>
-              Choose the date range for your business report
+              Choose the month for your financial report
             </Text>
 
-            {/* From */}
-            <Text style={styles.pickerLabel}>From</Text>
+            {/* Selected month display */}
+            <Text style={styles.pickerLabel}>Report Month</Text>
             <TouchableOpacity
               style={styles.pickerButton}
-              onPress={() => setShowFromMonthPicker(true)}
+              onPress={() => setShowMonthPicker(true)}
             >
               <Text style={styles.pickerButtonText}>
-                {MONTH_NAMES[fromMonth - 1]} {fromYear}
+                {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
               </Text>
               <ChevronDown color={COLORS.textGray} size={18} />
-            </TouchableOpacity>
-
-            {/* To */}
-            <Text style={styles.pickerLabel}>To</Text>
-            <TouchableOpacity
-              style={styles.pickerButton}
-              onPress={() => setShowToMonthPicker(true)}
-            >
-              <Text style={styles.pickerButtonText}>
-                {MONTH_NAMES[toMonth - 1]} {toYear}
-              </Text>
-              <ChevronDown color={COLORS.textGray} size={18} />
-            </TouchableOpacity>
-
-            {/* Quick presets */}
-            <Text style={styles.pickerLabel}>Quick Select</Text>
-            <View style={styles.presetRow}>
-              {[
-                { label: "Last 3 Months", months: 3 },
-                { label: "Last 6 Months", months: 6 },
-                { label: "Last 12 Months", months: 12 },
-              ].map((preset) => (
-                <TouchableOpacity
-                  key={preset.months}
-                  style={styles.presetButton}
-                  onPress={() => {
-                    const d = new Date();
-                    const from = new Date(
-                      d.getFullYear(),
-                      d.getMonth() - (preset.months - 1),
-                      1,
-                    );
-                    setFromMonth(from.getMonth() + 1);
-                    setFromYear(from.getFullYear());
-                    setToMonth(d.getMonth() + 1);
-                    setToYear(d.getFullYear());
-                  }}
-                >
-                  <Text style={styles.presetButtonText}>{preset.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TouchableOpacity
-              style={styles.presetButton}
-              onPress={() => {
-                const yr = new Date().getFullYear();
-                setFromMonth(1);
-                setFromYear(yr);
-                setToMonth(12);
-                setToYear(yr);
-              }}
-            >
-              <Text style={styles.presetButtonText}>
-                This Year ({new Date().getFullYear()})
-              </Text>
             </TouchableOpacity>
 
             {/* Generate button */}
             <TouchableOpacity
               style={[
                 styles.generateButton,
-                (isGeneratingPDF ||
-                  rangeAnalytics === undefined ||
-                  topProduct === undefined) &&
+                (isGeneratingPDF || monthlyReportData === undefined) &&
                   styles.generateButtonDisabled,
               ]}
               onPress={handleGeneratePDF}
-              disabled={
-                isGeneratingPDF ||
-                rangeAnalytics === undefined ||
-                topProduct === undefined
-              }
+              disabled={isGeneratingPDF || monthlyReportData === undefined}
             >
-              {isGeneratingPDF ||
-              rangeAnalytics === undefined ||
-              topProduct === undefined ? (
+              {isGeneratingPDF || monthlyReportData === undefined ? (
                 <ActivityIndicator size="small" color={COLORS.white} />
               ) : (
                 <>
@@ -462,18 +372,18 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      {/* From Month Picker */}
+      {/* Month Picker */}
       <Modal
-        visible={showFromMonthPicker}
+        visible={showMonthPicker}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowFromMonthPicker(false)}
+        onRequestClose={() => setShowMonthPicker(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.monthPickerContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Start Month</Text>
-              <TouchableOpacity onPress={() => setShowFromMonthPicker(false)}>
+              <Text style={styles.modalTitle}>Select Month</Text>
+              <TouchableOpacity onPress={() => setShowMonthPicker(false)}>
                 <X color={COLORS.textGray} size={22} />
               </TouchableOpacity>
             </View>
@@ -481,34 +391,36 @@ export default function ProfileScreen() {
             {/* Year toggle */}
             <View style={styles.yearRow}>
               <TouchableOpacity
-                onPress={() => setFromYear((y) => y - 1)}
+                onPress={() => setSelectedYear((y) => y - 1)}
                 disabled={
-                  !dataDateRange || fromYear <= (dataDateRange.minYear || 2020)
+                  !dataDateRange ||
+                  selectedYear <= (dataDateRange.minYear || 2020)
                 }
               >
                 <Text
                   style={[
                     styles.yearArrow,
                     (!dataDateRange ||
-                      fromYear <= (dataDateRange.minYear || 2020)) &&
+                      selectedYear <= (dataDateRange.minYear || 2020)) &&
                       styles.yearArrowDisabled,
                   ]}
                 >
                   ‹
                 </Text>
               </TouchableOpacity>
-              <Text style={styles.yearText}>{fromYear}</Text>
+              <Text style={styles.yearText}>{selectedYear}</Text>
               <TouchableOpacity
-                onPress={() => setFromYear((y) => y + 1)}
+                onPress={() => setSelectedYear((y) => y + 1)}
                 disabled={
-                  !dataDateRange || fromYear >= (dataDateRange.maxYear || 2030)
+                  !dataDateRange ||
+                  selectedYear >= (dataDateRange.maxYear || 2030)
                 }
               >
                 <Text
                   style={[
                     styles.yearArrow,
                     (!dataDateRange ||
-                      fromYear >= (dataDateRange.maxYear || 2030)) &&
+                      selectedYear >= (dataDateRange.maxYear || 2030)) &&
                       styles.yearArrowDisabled,
                   ]}
                 >
@@ -519,8 +431,8 @@ export default function ProfileScreen() {
 
             <View style={styles.monthGrid}>
               {MONTH_NAMES.map((name, i) => {
-                const hasData = monthHasData(i + 1, fromYear);
-                const isActive = fromMonth === i + 1;
+                const hasData = monthHasData(i + 1, selectedYear);
+                const isActive = selectedMonth === i + 1;
                 return (
                   <TouchableOpacity
                     key={i}
@@ -530,98 +442,8 @@ export default function ProfileScreen() {
                       !hasData && !isActive && styles.monthCellDisabled,
                     ]}
                     onPress={() => {
-                      setFromMonth(i + 1);
-                      setShowFromMonthPicker(false);
-                    }}
-                    disabled={!hasData}
-                  >
-                    <Text
-                      style={[
-                        styles.monthCellText,
-                        isActive && styles.monthCellTextActive,
-                        !hasData && !isActive && styles.monthCellTextDisabled,
-                      ]}
-                    >
-                      {name.substring(0, 3)}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* To Month Picker */}
-      <Modal
-        visible={showToMonthPicker}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowToMonthPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.monthPickerContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select End Month</Text>
-              <TouchableOpacity onPress={() => setShowToMonthPicker(false)}>
-                <X color={COLORS.textGray} size={22} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Year toggle */}
-            <View style={styles.yearRow}>
-              <TouchableOpacity
-                onPress={() => setToYear((y) => y - 1)}
-                disabled={
-                  !dataDateRange || toYear <= (dataDateRange.minYear || 2020)
-                }
-              >
-                <Text
-                  style={[
-                    styles.yearArrow,
-                    (!dataDateRange ||
-                      toYear <= (dataDateRange.minYear || 2020)) &&
-                      styles.yearArrowDisabled,
-                  ]}
-                >
-                  ‹
-                </Text>
-              </TouchableOpacity>
-              <Text style={styles.yearText}>{toYear}</Text>
-              <TouchableOpacity
-                onPress={() => setToYear((y) => y + 1)}
-                disabled={
-                  !dataDateRange || toYear >= (dataDateRange.maxYear || 2030)
-                }
-              >
-                <Text
-                  style={[
-                    styles.yearArrow,
-                    (!dataDateRange ||
-                      toYear >= (dataDateRange.maxYear || 2030)) &&
-                      styles.yearArrowDisabled,
-                  ]}
-                >
-                  ›
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.monthGrid}>
-              {MONTH_NAMES.map((name, i) => {
-                const hasData = monthHasData(i + 1, toYear);
-                const isActive = toMonth === i + 1;
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    style={[
-                      styles.monthCell,
-                      isActive && styles.monthCellActive,
-                      !hasData && !isActive && styles.monthCellDisabled,
-                    ]}
-                    onPress={() => {
-                      setToMonth(i + 1);
-                      setShowToMonthPicker(false);
+                      setSelectedMonth(i + 1);
+                      setShowMonthPicker(false);
                     }}
                     disabled={!hasData}
                   >

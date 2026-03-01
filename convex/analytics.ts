@@ -1012,3 +1012,104 @@ export const getDataDateRange = query({
     };
   },
 });
+
+// ─── Monthly Financial Report data (bandwidth-optimised) ──────────────────────
+// Fetches ONLY the data for a single selected month in one server-side call,
+// including line-item detail needed by generateMonthlyFinancialReportPDF.
+// This avoids pulling all historical data just to filter client-side.
+export const getMonthlyReportData = query({
+  args: {
+    userId: v.id("users"),
+    month: v.number(), // 1-12
+    year: v.number(), // e.g. 2026
+  },
+  handler: async (ctx, args) => {
+    const mm = String(args.month).padStart(2, "0");
+    const startDate = `${args.year}-${mm}-01`;
+
+    // Compute first day of the NEXT month as the exclusive upper bound
+    const nextMonth = args.month === 12 ? 1 : args.month + 1;
+    const nextYear = args.month === 12 ? args.year + 1 : args.year;
+    const mmNext = String(nextMonth).padStart(2, "0");
+    const endDate = `${nextYear}-${mmNext}-01`;
+
+    // Fetch sales and expenses for the month in parallel using compound index
+    const [salesRaw, expensesRaw] = await Promise.all([
+      ctx.db
+        .query("sales")
+        .withIndex("by_user_date", (q) =>
+          q
+            .eq("userId", args.userId)
+            .gte("date", startDate)
+            .lt("date", endDate),
+        )
+        .collect(),
+      ctx.db
+        .query("expenses")
+        .withIndex("by_user_date", (q) =>
+          q
+            .eq("userId", args.userId)
+            .gte("date", startDate)
+            .lt("date", endDate),
+        )
+        .collect(),
+    ]);
+
+    // Fetch line items for each sale (parallel)
+    const salesWithItems = await Promise.all(
+      salesRaw.map(async (sale) => {
+        const items = await ctx.db
+          .query("saleItems")
+          .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+          .collect();
+        return {
+          saleId: sale._id as string,
+          transactionId: sale.transactionId,
+          date: sale.date, // "YYYY-MM-DD"
+          createdAt: sale.createdAt,
+          totalAmount: sale.totalAmount,
+          items: items.map((i) => ({
+            name: i.productName,
+            category: i.category,
+            quantity: i.quantity,
+            unitPrice: i.price,
+            subtotal: i.subtotal,
+          })),
+        };
+      }),
+    );
+
+    // Fetch line items for each expense (parallel)
+    const expensesWithItems = await Promise.all(
+      expensesRaw.map(async (expense) => {
+        const items = await ctx.db
+          .query("expenseItems")
+          .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
+          .collect();
+        return {
+          expenseId: expense._id as string,
+          transactionId: expense.transactionId,
+          date: expense.date,
+          createdAt: expense.createdAt,
+          totalAmount: expense.totalAmount,
+          items: items.map((i) => ({
+            title: i.title,
+            category: i.category,
+            quantity: i.quantity,
+            amount: i.amount,
+            total: i.total,
+          })),
+        };
+      }),
+    );
+
+    return {
+      month: args.month,
+      year: args.year,
+      sales: salesWithItems,
+      expenses: expensesWithItems,
+      salesGrandTotal: salesRaw.reduce((s, r) => s + r.totalAmount, 0),
+      expensesGrandTotal: expensesRaw.reduce((s, r) => s + r.totalAmount, 0),
+    };
+  },
+});

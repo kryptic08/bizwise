@@ -1,13 +1,14 @@
 import { useMutation } from "convex/react";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import { Camera, Eye, EyeOff } from "lucide-react-native";
+import { Camera, Eye, EyeOff, ChevronDown, X } from "lucide-react-native";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StatusBar,
@@ -19,7 +20,7 @@ import {
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { api } from "../convex/_generated/api";
-import { useAuth } from "./context/AuthContext";
+import { useAuth, BUSINESS_TYPES, BusinessType } from "./context/AuthContext";
 
 const COLORS = {
   primaryBlue: "#3b6ea5",
@@ -37,6 +38,8 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
   const [name, setName] = useState("");
+  const [businessType, setBusinessType] = useState<BusinessType | "">("");
+  const [showBusinessTypePicker, setShowBusinessTypePicker] = useState(false);
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -102,6 +105,11 @@ export default function LoginScreen() {
       return;
     }
 
+    if (isSignUp && !businessType) {
+      Alert.alert("Error", "Please select your business type");
+      return;
+    }
+
     // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
@@ -123,6 +131,7 @@ export default function LoginScreen() {
           email,
           password,
           name,
+          businessType,
         });
 
         // If profile picture was selected, upload it to Convex
@@ -144,6 +153,7 @@ export default function LoginScreen() {
             userId: updatedResult.userId,
             email: updatedResult.email,
             name: updatedResult.name,
+            businessType: updatedResult.businessType as BusinessType,
             profilePicture: updatedResult.profilePicture,
           });
         } else {
@@ -151,6 +161,7 @@ export default function LoginScreen() {
             userId: result.userId,
             email: result.email,
             name: name,
+            businessType: businessType as BusinessType,
             profilePicture: undefined,
           });
         }
@@ -167,6 +178,7 @@ export default function LoginScreen() {
           email: result.email,
           name: result.name,
           pin: result.pin, // Include PIN if exists
+          businessType: result.businessType as BusinessType,
           profilePicture: result.profilePicture, // Include profile picture if exists
         });
         // If user has PIN, go to PIN entry, otherwise prompt to set up PIN
@@ -297,6 +309,27 @@ export default function LoginScreen() {
           </View>
         )}
 
+        {/* Business Type Input (only for sign up) */}
+        {isSignUp && (
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputLabel}>Business Type</Text>
+            <TouchableOpacity
+              style={[styles.input, styles.dropdownInput]}
+              onPress={() => setShowBusinessTypePicker(true)}
+            >
+              <Text
+                style={[
+                  styles.dropdownText,
+                  !businessType && styles.placeholderText,
+                ]}
+              >
+                {businessType || "Select Business Type"}
+              </Text>
+              <ChevronDown size={20} color={COLORS.textGray} />
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Email Input */}
         <View style={styles.inputContainer}>
           <Text style={styles.inputLabel}>Email</Text>
@@ -373,6 +406,49 @@ export default function LoginScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Business Type Picker Modal */}
+      <Modal
+        visible={showBusinessTypePicker}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowBusinessTypePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Business Type</Text>
+              <TouchableOpacity onPress={() => setShowBusinessTypePicker(false)}>
+                <X size={24} color={COLORS.textDark} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalList}>
+              {BUSINESS_TYPES.map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  style={styles.modalItem}
+                  onPress={() => {
+                    setBusinessType(type);
+                    setShowBusinessTypePicker(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.modalItemText,
+                      businessType === type && styles.selectedModalItemText,
+                    ]}
+                  >
+                    {type}
+                  </Text>
+                  {businessType === type && (
+                    <View style={styles.selectedIndicator} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -491,6 +567,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: COLORS.textDark,
   },
+  dropdownInput: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  dropdownText: {
+    fontSize: 16,
+    color: COLORS.textDark,
+  },
+  placeholderText: {
+    color: COLORS.textGray,
+  },
   passwordContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -546,5 +634,55 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.primaryBlue,
     fontWeight: "700",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: "60%",
+    paddingBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.lightBlueBg,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  modalList: {
+    padding: 20,
+  },
+  modalItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.lightBlueBg,
+  },
+  modalItemText: {
+    fontSize: 16,
+    color: COLORS.textDark,
+  },
+  selectedModalItemText: {
+    color: COLORS.primaryBlue,
+    fontWeight: "600",
+  },
+  selectedIndicator: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: COLORS.primaryBlue,
   },
 });

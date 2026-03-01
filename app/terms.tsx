@@ -38,35 +38,20 @@ export default function TermsScreen() {
 
       <View style={styles.content}>
         <ScrollView contentContainerStyle={styles.scrollContent}>
-          <Text style={styles.paragraph}>Welcome to BizWise!</Text>
           <Text style={styles.paragraph}>
-            BizWise is designed to help you manage your finances efficiently.
-            You must be at least 18 years old to use the app, and you are
-            responsible for keeping your account login details safe. Any
-            activity under your account is your responsibility.
+            By using BizWise, you agree to use the app only for lawful purposes and to provide
+            accurate financial information. BizWise is an academic project designed to assist with recording
+            sales, expenses, receipt scanning, and report generation. It does not replace professional
+            accounting advice.
           </Text>
           <Text style={styles.paragraph}>
-            We collect and use your financial data to provide and improve our
-            services. While we use strong security measures to protect your
-            information, we cannot guarantee that it is completely secure.
-            BizWise may also connect with third-party services such as banks or
-            payment platforms. We are not responsible for how these third
-            parties handle your data.
+            While the app uses AI to extract receipt data, users are responsible for reviewing and confirming
+            all entries. The developers are not liable for financial decisions, losses, or errors resulting from
+            system outputs or incorrect data input.
           </Text>
           <Text style={styles.paragraph}>
-            All content, software, and designs in BizWise are owned by us and
-            are protected by copyright and intellectual property laws. You may
-            not copy, share, or modify any part of the app without permission.
-          </Text>
-          <Text style={styles.subtitle}>Please note:</Text>
-          <Text style={styles.paragraph}>
-            BizWise provides financial insights and calculations as is and for
-            guidance only. We are not liable for financial losses, errors, or
-            decisions based on the app.
-          </Text>
-          <Text style={styles.paragraph}>
-            Accounts may be suspended or terminated if rules are broken. You may
-            also close your account anytime.
+            Your data will be used only for system functionality, testing, and academic evaluation. By
+            continuing to use the app, you agree to these terms.
           </Text>
         </ScrollView>
       </View>
@@ -107,12 +92,5 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: COLORS.textDark,
     marginBottom: 16,
-  },
-  subtitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: COLORS.textDark,
-    marginTop: 8,
-    marginBottom: 12,
   },
 });

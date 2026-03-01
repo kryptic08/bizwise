@@ -61,11 +61,7 @@ export default function SecurityScreen() {
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Security</Text>
-        <TouchableOpacity style={styles.headerButton}>
-          <View style={styles.helpIconBg}>
-            <HelpCircle color={COLORS.primaryBlue} size={18} />
-          </View>
-        </TouchableOpacity>
+        <View style={styles.headerButton} />
       </View>
 
       {/* Content */}

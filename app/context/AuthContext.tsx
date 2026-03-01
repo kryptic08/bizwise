@@ -2,12 +2,30 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Id } from "../../convex/_generated/dataModel";
 
+export type BusinessType = 
+  | "Food Business"
+  | "Printing Services"
+  | "Construction"
+  | "Retail"
+  | "Meat Shop"
+  | "Others";
+
+export const BUSINESS_TYPES: BusinessType[] = [
+  "Food Business",
+  "Printing Services",
+  "Construction",
+  "Retail",
+  "Meat Shop",
+  "Others",
+];
+
 interface User {
   userId: Id<"users">;
   email: string;
   name: string;
   phone?: string;
   pin?: string;
+  businessType?: BusinessType;
   profilePicture?: string;
 }
 

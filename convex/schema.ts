@@ -9,6 +9,7 @@ export default defineSchema({
     name: v.string(),
     phone: v.optional(v.string()),
     pin: v.optional(v.string()), // 4-digit PIN for quick authentication
+    businessType: v.optional(v.string()), // Business type for dynamic categorization
     profilePictureStorageId: v.optional(v.id("_storage")), // Convex storage ID for profile picture
     profilePicture: v.optional(v.string()), // Legacy: URL or local URI (kept for backward compatibility)
     targetIncome: v.optional(

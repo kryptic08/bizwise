@@ -2,8 +2,8 @@ import { useRouter } from "expo-router";
 import {
   ArrowLeft,
   Bell,
+  Briefcase,
   ChevronRight,
-  HelpCircle,
   Lock,
   Target,
   Trash2,
@@ -34,10 +34,17 @@ export default function SettingsScreen() {
   const settingsOptions = [
     {
       id: 1,
-      title: "Target Income",
+      title: "Target Sales",
       icon: Target,
       color: COLORS.iconBlue,
       onPress: () => router.push("/target-income"),
+    },
+    {
+      id: 5,
+      title: "Business Type",
+      icon: Briefcase,
+      color: COLORS.iconBlue,
+      onPress: () => router.push("/change-business-type" as any),
     },
     {
       id: 2,
@@ -74,11 +81,7 @@ export default function SettingsScreen() {
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
-        <TouchableOpacity>
-          <View style={styles.helpIconBg}>
-            <HelpCircle color={COLORS.primaryBlue} size={18} />
-          </View>
-        </TouchableOpacity>
+        <View style={styles.helpIconBg} />
       </View>
 
       <View style={styles.content}>
