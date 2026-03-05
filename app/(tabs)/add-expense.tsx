@@ -692,11 +692,11 @@ If no items found or image is unclear, return: []`;
     if (items && items.length > 0) {
       const newExpenses: ExpenseItem[] = items.map((item: any) => ({
         id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        // Re-categorize using the business-type engine so AI category is
-        // overridden when the business context demands a different bucket.
+        // Trust AI's category from Gemini - it has the business context from the prompt
+        // Only use local categorization as fallback if AI didn't provide one
         category:
-          categorizeItemForBusiness(item.title || "", user?.businessType) ||
           item.category ||
+          categorizeItemForBusiness(item.title || "", user?.businessType) ||
           "General",
         title: item.title || "Unknown Item",
         amount: parseFloat(item.amount || 0).toFixed(2),
