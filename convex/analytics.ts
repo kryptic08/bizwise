@@ -305,7 +305,26 @@ export const getCombinedTransactions = query({
         "Nov",
         "Dec",
       ];
-      return `${months[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
+      return `${months[date.getUTCMonth()]}/${date.getUTCDate()}/${date.getUTCFullYear()}`;
+    };
+
+    // Helper to format date from sale/expense record (use stored date if available)
+    const getDateFromSale = (sale: { date?: string; createdAt: number }) => {
+      if (sale.date) {
+        const [year, month, day] = sale.date.split("-").map(Number);
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        return `${months[month - 1]}/${day}/${year}`;
+      }
+      return formatDate(sale.createdAt);
+    };
+
+    const getDateFromExpense = (expense: { date?: string; createdAt: number }) => {
+      if (expense.date) {
+        const [year, month, day] = expense.date.split("-").map(Number);
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        return `${months[month - 1]}/${day}/${year}`;
+      }
+      return formatDate(expense.createdAt);
     };
 
     // Create unified transaction array with sortKey
@@ -338,7 +357,7 @@ export const getCombinedTransactions = query({
       const transaction = {
         id: sale._id,
         transactionId: sale.transactionId,
-        date: formatDate(sale.createdAt),
+        date: getDateFromSale(sale),
         time: formatTime(sale.createdAt),
         items: `${sale.itemCount} items`,
         amount: `₱${sale.totalAmount.toFixed(2)}`,
@@ -367,7 +386,7 @@ export const getCombinedTransactions = query({
       const transaction = {
         id: expense._id,
         transactionId: expense.transactionId,
-        date: formatDate(expense.createdAt),
+        date: getDateFromExpense(expense),
         time: formatTime(expense.createdAt),
         items: `${expense.itemCount} items`,
         amount: `₱${expense.totalAmount.toFixed(2)}`,
@@ -402,22 +421,40 @@ export const getCombinedTransactionsPaginated = query({
   },
   handler: async (ctx, args) => {
     const limit = Math.min(args.limit, 50); // Cap at 50 for safety
+    const cursor = args.cursor;
 
-    // Get sales with pagination
+    // Get sales - order by createdAt desc for proper pagination
     let salesQuery = ctx.db
       .query("sales")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .order("desc");
 
-    const allSales = await salesQuery.take(limit * 2); // Get more to ensure we have enough after filtering
+    const salesPage = await salesQuery.take(limit + 1); // Take one extra to check if there's more
 
-    // Get expenses with pagination
+    // Get expenses - order by createdAt desc for proper pagination
     let expensesQuery = ctx.db
       .query("expenses")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .order("desc");
 
-    const allExpenses = await expensesQuery.take(limit * 2);
+    const expensesPage = await expensesQuery.take(limit + 1);
+
+    // Apply cursor filter in JavaScript (Convex filter is limited)
+    let filteredSales = salesPage;
+    let filteredExpenses = expensesPage;
+    
+    if (cursor) {
+      filteredSales = salesPage.filter(s => s.createdAt < cursor);
+      filteredExpenses = expensesPage.filter(e => e.createdAt < cursor);
+    }
+
+    // Check if there are more results (compare original pages before filtering)
+    const salesHasMore = salesPage.length > limit;
+    const expensesHasMore = expensesPage.length > limit;
+
+    // Trim to actual limit
+    const sales = filteredSales.slice(0, limit);
+    const expenses = filteredExpenses.slice(0, limit);
 
     // Helper functions
     const formatTime = (timestamp: number) => {
@@ -431,24 +468,45 @@ export const getCombinedTransactionsPaginated = query({
       return `${hours}:${minutes.toString().padStart(2, "0")} ${ampm}`;
     };
 
-    const formatDate = (timestamp: number) => {
-      const phTimestamp = timestamp + 8 * 60 * 60 * 1000;
+    // Use the stored date field if available, otherwise format from createdAt
+    const formatDateFromSale = (sale: { date?: string; createdAt: number }) => {
+      if (sale.date) {
+        // date is in YYYY-MM-DD format, convert to "Feb/25/2026" format
+        const [year, month, day] = sale.date.split("-").map(Number);
+        const months = [
+          "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        ];
+        return `${months[month - 1]}/${day}/${year}`;
+      }
+      // Fallback to createdAt
+      const phTimestamp = sale.createdAt + 8 * 60 * 60 * 1000;
       const date = new Date(phTimestamp);
       const months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
       ];
-      return `${months[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
+      return `${months[date.getUTCMonth()]}/${date.getUTCDate()}/${date.getUTCFullYear()}`;
+    };
+
+    const formatDateFromExpense = (expense: { date?: string; createdAt: number }) => {
+      if (expense.date) {
+        // date is in YYYY-MM-DD format, convert to "Feb/25/2026" format
+        const [year, month, day] = expense.date.split("-").map(Number);
+        const months = [
+          "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        ];
+        return `${months[month - 1]}/${day}/${year}`;
+      }
+      // Fallback to createdAt
+      const phTimestamp = expense.createdAt + 8 * 60 * 60 * 1000;
+      const date = new Date(phTimestamp);
+      const months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+      ];
+      return `${months[date.getUTCMonth()]}/${date.getUTCDate()}/${date.getUTCFullYear()}`;
     };
 
     // Combine and sort transactions
@@ -472,9 +530,7 @@ export const getCombinedTransactionsPaginated = query({
     }> = [];
 
     // Process sales
-    for (const sale of allSales) {
-      if (args.cursor && sale.createdAt >= args.cursor) continue;
-
+    for (const sale of sales) {
       const items = await ctx.db
         .query("saleItems")
         .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
@@ -483,7 +539,7 @@ export const getCombinedTransactionsPaginated = query({
       allTransactions.push({
         id: sale._id,
         transactionId: sale.transactionId,
-        date: formatDate(sale.createdAt),
+        date: formatDateFromSale(sale),
         time: formatTime(sale.createdAt),
         items: `${sale.itemCount} items`,
         amount: `₱${sale.totalAmount.toFixed(2)}`,
@@ -501,9 +557,7 @@ export const getCombinedTransactionsPaginated = query({
     }
 
     // Process expenses
-    for (const expense of allExpenses) {
-      if (args.cursor && expense.createdAt >= args.cursor) continue;
-
+    for (const expense of expenses) {
       const items = await ctx.db
         .query("expenseItems")
         .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
@@ -512,7 +566,7 @@ export const getCombinedTransactionsPaginated = query({
       allTransactions.push({
         id: expense._id,
         transactionId: expense.transactionId,
-        date: formatDate(expense.createdAt),
+        date: formatDateFromExpense(expense),
         time: formatTime(expense.createdAt),
         items: `${expense.itemCount} items`,
         amount: `₱${expense.totalAmount.toFixed(2)}`,
@@ -536,10 +590,7 @@ export const getCombinedTransactionsPaginated = query({
     const paginatedTransactions = allTransactions.slice(0, limit);
 
     // Determine if there are more results
-    const hasMore =
-      allTransactions.length > limit ||
-      allSales.length === limit * 2 ||
-      allExpenses.length === limit * 2;
+    const hasMore = salesHasMore || expensesHasMore;
 
     // Get the cursor for next page (oldest item's createdAt)
     const nextCursor =

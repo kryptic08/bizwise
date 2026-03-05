@@ -37,6 +37,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   unlockWithPin: () => void;
   lockWithPin: () => void;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -109,6 +110,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, [user?.pin]);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const storedUser = await AsyncStorage.getItem(USER_STORAGE_KEY);
+      if (storedUser) {
+        const userData = JSON.parse(storedUser);
+        setUser(userData);
+      }
+    } catch (error) {
+      console.error("Error refreshing user:", error);
+    }
+  }, []);
+
   const value = useMemo(
     () => ({
       user,
@@ -118,8 +131,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout,
       unlockWithPin,
       lockWithPin,
+      refreshUser,
     }),
-    [user, isLoading, isPinLocked, login, logout, unlockWithPin, lockWithPin]
+    [user, isLoading, isPinLocked, login, logout, unlockWithPin, lockWithPin, refreshUser]
   );
 
   return (

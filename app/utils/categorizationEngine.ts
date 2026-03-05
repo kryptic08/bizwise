@@ -36,6 +36,13 @@ export function getCategoriesForBusinessType(
         "Utilities",
         "Equipment",
         "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
         "General",
       ];
 
@@ -47,44 +54,314 @@ export function getCategoriesForBusinessType(
         "Utilities",
         "Equipment",
         "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "Ice & Cold Storage",
         "General",
       ];
 
     case "Printing Services":
       return [
-        "Raw Materials", // ink, paper, toner
-        "Equipment", // printers, cutters, laminators
+        "Raw Materials",
+        "Equipment",
         "Store Supplies",
         "Packaging Materials",
         "Utilities",
         "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
         "General",
       ];
 
     case "Construction":
       return [
-        "Construction Materials", // cement, steel, lumber
-        "Equipment", // tools, heavy machinery
+        "Construction Materials",
+        "Equipment",
         "Labor & Subcontracting",
         "Transportation",
         "Store Supplies",
         "Utilities",
+        "Rent",
+        "Marketing & Advertising",
+        "Permits & Certifications",
+        "Insurance",
+        "Bank Charges",
+        "Tools & Hardware",
+        "Safety Equipment",
         "General",
       ];
 
     case "Retail":
       return [
-        "Merchandise Inventory", // items bought for resale
+        "Merchandise Inventory",
         "Store Supplies",
         "Packaging Materials",
         "Utilities",
         "Equipment",
         "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "Security Services",
+        "General",
+      ];
+
+    case "Water Station":
+      return [
+        "Water Supplies",
+        "Gallon/Container Inventory",
+        "Utilities",
+        "Equipment",
+        "Transportation",
+        "Store Supplies",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Laundry Shop":
+      return [
+        "Detergents & Chemicals",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Packaging Materials",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Internet Cafe":
+      return [
+        "Internet Services",
+        "Computer Equipment",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Packaging Materials",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Software Subscriptions",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Beauty Salon":
+      return [
+        "Hair & Beauty Products",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Packaging Materials",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Repair Shop":
+      return [
+        "Parts & Components",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Tools",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Pharmacy":
+      return [
+        "Medicines & Drugs",
+        "Medical Supplies",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Packaging Materials",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Convenience Store":
+      return [
+        "Merchandise Inventory",
+        "Store Supplies",
+        "Packaging Materials",
+        "Utilities",
+        "Equipment",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "Security Services",
+        "General",
+      ];
+
+    case "Hardware":
+      return [
+        "Hardware Inventory",
+        "Store Supplies",
+        "Packaging Materials",
+        "Utilities",
+        "Equipment",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Computer Shop":
+      return [
+        "Computer Parts",
+        "Accessories",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Packaging Materials",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Software Subscriptions",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Mobile Shop":
+      return [
+        "Phone & Gadgets",
+        "Accessories",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Packaging Materials",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Bakery":
+      return [
+        "Raw Materials",
+        "Packaging Materials",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Coffee Shop":
+      return [
+        "Raw Materials",
+        "Packaging Materials",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
+        "General",
+      ];
+
+    case "Sari-Sari Store":
+      return [
+        "Merchandise Inventory",
+        "Store Supplies",
+        "Packaging Materials",
+        "Utilities",
+        "Equipment",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
         "General",
       ];
 
     default:
-      // "Others" or unknown
       return [
         "Raw Materials",
         "Merchandise Inventory",
@@ -93,6 +370,13 @@ export function getCategoriesForBusinessType(
         "Utilities",
         "Equipment",
         "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "Licenses & Permits",
+        "Insurance",
+        "Bank Charges",
         "General",
       ];
   }
@@ -133,6 +417,12 @@ const BASE_KEYWORDS: KeywordMap = {
     "label",
     "sticker",
     "seal",
+    "bubble wrap",
+    "shrink wrap",
+    "envelope",
+    "box",
+    "sando bag",
+    "ziplock",
   ],
   "Store Supplies": [
     "supplies",
@@ -158,16 +448,28 @@ const BASE_KEYWORDS: KeywordMap = {
     "sanitizer",
     "disinfectant",
     "bleach",
+    "trash bag",
+    "pail",
+    "dustpan",
+    "rags",
+    "hanger",
+    "price tag",
+    "sticker label",
   ],
   Utilities: [
     "electricity",
+    "electric bill",
     "water",
+    "water bill",
     "bill",
     "internet",
+    "internet bill",
     "phone",
+    "phone bill",
     "cable",
     "wifi",
     "utility",
+    "utility bill",
     "electric",
     "pldt",
     "smart",
@@ -181,6 +483,10 @@ const BASE_KEYWORDS: KeywordMap = {
     "kwh",
     "kilowatt",
     "consumption",
+    "meralco bill",
+    "load",
+    "prepaid",
+    "postpaid",
   ],
   Equipment: [
     "equipment",
@@ -188,6 +494,7 @@ const BASE_KEYWORDS: KeywordMap = {
     "device",
     "appliance",
     "refrigerator",
+    "fridge",
     "oven",
     "microwave",
     "blender",
@@ -195,6 +502,7 @@ const BASE_KEYWORDS: KeywordMap = {
     "fan",
     "aircon",
     "ac",
+    "air conditioner",
     "freezer",
     "stove",
     "grill",
@@ -202,10 +510,26 @@ const BASE_KEYWORDS: KeywordMap = {
     "cutter",
     "slicer",
     "scale",
+    "weighing scale",
     "register",
     "pos",
-    "tools",
-    "hardware",
+    "cash register",
+    "printer",
+    "scanner",
+    "computer",
+    "laptop",
+    "monitor",
+    "keyboard",
+    "mouse",
+    "speaker",
+    "tv",
+    "television",
+    "cctv",
+    "camera",
+    "generator",
+    "inverter",
+    "battery",
+    "solar panel",
   ],
   Transportation: [
     "gas",
@@ -217,22 +541,203 @@ const BASE_KEYWORDS: KeywordMap = {
     "grab",
     "bus",
     "train",
+    "jeepney",
+    "tricycle",
+    "motorcycle",
     "parking",
     "toll",
-    "tricycle",
+    "toll fee",
     "petron",
     "shell",
     "caltex",
     "phoenix",
     "seaoil",
+    "leteo",
     "fare",
     "transpo",
+    "transportation",
     "vehicle",
     "motor",
+    "car",
+    "truck",
+    "van",
     "liter",
     "litre",
     "delivery",
     "shipping",
+    "courier",
+    "logistics",
+    " freight",
+    "shipping fee",
+    "driver",
+    "helper",
+    "fuel card",
+  ],
+  Rent: [
+    "rent",
+    "rental",
+    "rental fee",
+    "lease",
+    "leasehold",
+    "monthly rent",
+    "space rental",
+    "store rental",
+    "stall rental",
+    "warehouse rental",
+    "office rental",
+    "landlord",
+    "landlady",
+    "owner",
+    "rental deposit",
+    "advance rent",
+    "security deposit",
+  ],
+  "Marketing & Advertising": [
+    "marketing",
+    "advertising",
+    "ads",
+    "promotion",
+    "promo",
+    "flyer",
+    "poster",
+    "banner",
+    "tarpaulin",
+    "signage",
+    "signboard",
+    "neon sign",
+    "facebook ads",
+    "google ads",
+    "instagram ads",
+    "social media",
+    "marketing campaign",
+    "discount",
+    "rebate",
+    "commission",
+    "referral",
+    "giveaway",
+    "prize",
+    "raffle",
+    "coupon",
+    "voucher",
+    "leaflet",
+    "brochure",
+    "business card",
+    "printing",
+  ],
+  "Employee Wages": [
+    "wage",
+    "wages",
+    "salary",
+    "pay",
+    "payroll",
+    "employee",
+    "staff",
+    "worker",
+    "labor",
+    "labor cost",
+    "bonus",
+    "incentive",
+    "overtime",
+    "allowance",
+    "commission",
+    "daily wage",
+    "monthly salary",
+    "13th month",
+    " Separation pay",
+    "termination pay",
+    "benefits",
+    "sss",
+    "philhealth",
+    "pagibig",
+    "government contribution",
+    "hiring",
+  ],
+  "Maintenance & Repairs": [
+    "maintenance",
+    "repair",
+    "repairing",
+    "fix",
+    "fixing",
+    "service",
+    "servicing",
+    "maintain",
+    "troubleshoot",
+    "troubleshooting",
+    "parts replacement",
+    "spare parts",
+    "replacement",
+    "overhaul",
+    "tune-up",
+    "cleaning service",
+    "pest control",
+    "plumbing",
+    "electrical repair",
+    "aircon service",
+    "refrigerator service",
+  ],
+  "Licenses & Permits": [
+    "license",
+    "permit",
+    "permits",
+    "licensing",
+    "registration",
+    "business permit",
+    "mayor permit",
+    "barangay permit",
+    "dti",
+    "sec",
+    "bir",
+    "tin",
+    "certificate",
+    "clearance",
+    "accreditation",
+    "renewal",
+    "compliance",
+    "legal fee",
+    "attorney",
+    "lawyer",
+    "notary",
+    "doc stamp",
+    " Documentary stamp",
+  ],
+  Insurance: [
+    "insurance",
+    "premium",
+    "insurance premium",
+    "coverage",
+    "policy",
+    "health insurance",
+    "life insurance",
+    "business insurance",
+    "property insurance",
+    "vehicle insurance",
+    "car insurance",
+    "microinsurance",
+    "marine insurance",
+    "claim",
+    "insured",
+  ],
+  "Bank Charges": [
+    "bank",
+    "banking",
+    "bank charge",
+    "service charge",
+    "fee",
+    "charges",
+    "maintenance fee",
+    "ledger fee",
+    "dormancy fee",
+    "transfer fee",
+    "remittance",
+    "wire fee",
+    "interest",
+    "interest rate",
+    "loan",
+    "loan payment",
+    "credit",
+    "credit card",
+    "installment",
+    "atm fee",
   ],
 };
 
@@ -279,6 +784,46 @@ const RAW_MATERIAL_KEYWORDS: string[] = [
   "tarpaulin",
   "canvas",
   "laminate",
+  // Bakery specific
+  "yeast",
+  "baking powder",
+  "baking soda",
+  "cocoa",
+  "chocolate",
+  "vanilla",
+  "cream",
+  "margarine",
+  "shortening",
+  "bread",
+  "pasta",
+  "noodle",
+  "coffee",
+  "tea",
+  "cocoa powder",
+  "jam",
+  "honey",
+  "syrup",
+  "chocolate syrup",
+  // Coffee shop specific
+  "espresso",
+  "latte",
+  "cappuccino",
+  "mocha",
+  "americano",
+  "coffee beans",
+  "ground coffee",
+  "matcha",
+  "strawberry",
+  "mango",
+  "banana",
+  "avocado",
+  "milk tea",
+  "pearl",
+  "tapioca",
+  "boba",
+  "ice cream",
+  "vanilla ice cream",
+  "chocolate ice cream",
 ];
 
 /**
@@ -422,7 +967,131 @@ export function categorizeItemForBusiness(
 
     // ── Retail ───────────────────────────────────────────────────────────
     case "Retail": {
-      // Anything that looks like something sold → Merchandise Inventory
+      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+        return "Merchandise Inventory";
+      }
+      break;
+    }
+
+    // ── Water Station ─────────────────────────────────────────────────
+    case "Water Station": {
+      if (["water", "distilled", "refill", "gallon", "container", "dispenser"].some(kw => lower.includes(kw))) {
+        return "Water Supplies";
+      }
+      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+        return "Gallon/Container Inventory";
+      }
+      break;
+    }
+
+    // ── Laundry Shop ──────────────────────────────────────────────────
+    case "Laundry Shop": {
+      if (["detergent", "bleach", "fabric conditioner", "softener", "soap", "laundry"].some(kw => lower.includes(kw))) {
+        return "Detergents & Chemicals";
+      }
+      break;
+    }
+
+    // ── Internet Cafe ───────────────────────────────────────────────────
+    case "Internet Cafe": {
+      if (["internet", "wifi", "load", "data"].some(kw => lower.includes(kw))) {
+        return "Internet Services";
+      }
+      if (["computer", "pc", "laptop", "cpu", "monitor", "keyboard", "mouse", "headset"].some(kw => lower.includes(kw))) {
+        return "Computer Equipment";
+      }
+      break;
+    }
+
+    // ── Beauty Salon ───────────────────────────────────────────────────
+    case "Beauty Salon": {
+      if (["shampoo", "conditioner", "hair dye", "bleach", "perm", "treatment", "styling", "gel", "wax", "pomade", "hair spray"].some(kw => lower.includes(kw))) {
+        return "Hair & Beauty Products";
+      }
+      break;
+    }
+
+    // ── Repair Shop ───────────────────────────────────────────────────
+    case "Repair Shop": {
+      if (["part", "component", "spare", "replacement", "screen", "battery", "charger", "cable"].some(kw => lower.includes(kw))) {
+        return "Parts & Components";
+      }
+      if (["tool", "solder", "multimeter", "screwdriver", "wrench"].some(kw => lower.includes(kw))) {
+        return "Tools";
+      }
+      break;
+    }
+
+    // ── Pharmacy ────────────────────────────────────────────────────────
+    case "Pharmacy": {
+      if (["medicine", "drug", "tablet", "capsule", "syrup", "prescription", "OTC", "pharma"].some(kw => lower.includes(kw))) {
+        return "Medicines & Drugs";
+      }
+      if (["bandage", "gauze", "cotton", "alcohol", "betadine", "thermometer", "bp monitor"].some(kw => lower.includes(kw))) {
+        return "Medical Supplies";
+      }
+      break;
+    }
+
+    // ── Convenience Store ─────────────────────────────────────────────
+    case "Convenience Store": {
+      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+        return "Merchandise Inventory";
+      }
+      break;
+    }
+
+    // ── Hardware ──────────────────────────────────────────────────────
+    case "Hardware": {
+      if (CONSTRUCTION_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+        return "Hardware Inventory";
+      }
+      if (["tool", "hammer", "saw", "drill", "wrench", "screwdriver", "plier"].some(kw => lower.includes(kw))) {
+        return "Hardware Inventory";
+      }
+      break;
+    }
+
+    // ── Computer Shop ───────────────────────────────────────────────────
+    case "Computer Shop": {
+      if (["cpu", "processor", "motherboard", "ram", "hard disk", "ssd", "gpu", "graphics card", "psu", "case", "fan"].some(kw => lower.includes(kw))) {
+        return "Computer Parts";
+      }
+      if (["mouse", "keyboard", "headset", "webcam", "monitor", "speaker", "cable", "adapter"].some(kw => lower.includes(kw))) {
+        return "Accessories";
+      }
+      break;
+    }
+
+    // ── Mobile Shop ───────────────────────────────────────────────────
+    case "Mobile Shop": {
+      if (["phone", "smartphone", "tablet", "gadget", "iphone", "samsung", "vivo", "oppo", "realme", "xiaomi"].some(kw => lower.includes(kw))) {
+        return "Phone & Gadgets";
+      }
+      if (["case", "charger", "cable", "headset", "earphone", "powerbank", "screen protector"].some(kw => lower.includes(kw))) {
+        return "Accessories";
+      }
+      break;
+    }
+
+    // ── Bakery ────────────────────────────────────────────────────────
+    case "Bakery": {
+      if (RAW_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+        return "Raw Materials";
+      }
+      break;
+    }
+
+    // ── Coffee Shop ───────────────────────────────────────────────────
+    case "Coffee Shop": {
+      if (RAW_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+        return "Raw Materials";
+      }
+      break;
+    }
+
+    // ── Sari-Sari Store ────────────────────────────────────────────────
+    case "Sari-Sari Store": {
       if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
         return "Merchandise Inventory";
       }

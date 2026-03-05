@@ -1,4 +1,5 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
@@ -79,14 +80,74 @@ export default function CounterScreen() {
   // Edit mode state (per category)
   const [editMode, setEditMode] = useState<Record<string, boolean>>({});
 
+  // Cart cache key
+  const CART_CACHE_KEY = "bizwise_cart_cache";
+
+  // Load saved cart data on mount
+  React.useEffect(() => {
+    const loadSavedCart = async () => {
+      try {
+        // Check if there's a pending checkout completion
+        const checkoutComplete = await AsyncStorage.getItem("bizwise_checkout_complete");
+        if (checkoutComplete === "true") {
+          // Clear cart after successful checkout
+          await AsyncStorage.removeItem(CART_CACHE_KEY);
+          await AsyncStorage.removeItem("bizwise_checkout_complete");
+          return;
+        }
+
+        const savedData = await AsyncStorage.getItem(CART_CACHE_KEY);
+        if (savedData) {
+          const parsed = JSON.parse(savedData);
+          if (parsed.quantities) {
+            setQuantities(parsed.quantities);
+          }
+          if (parsed.selectedDate) {
+            setSelectedDate(new Date(parsed.selectedDate));
+          }
+        }
+      } catch (error) {
+        console.error("Error loading saved cart:", error);
+      }
+    };
+    loadSavedCart();
+  }, []);
+
+  // Save cart data when quantities or selectedDate changes
+  React.useEffect(() => {
+    const saveCart = async () => {
+      try {
+        await AsyncStorage.setItem(
+          CART_CACHE_KEY,
+          JSON.stringify({
+            quantities,
+            selectedDate: selectedDate.toISOString(),
+          }),
+        );
+      } catch (error) {
+        console.error("Error saving cart:", error);
+      }
+    };
+    saveCart();
+  }, [quantities, selectedDate]);
+
+  // Clear cart cache after successful checkout
+  const clearCartCache = async () => {
+    try {
+      await AsyncStorage.removeItem(CART_CACHE_KEY);
+    } catch (error) {
+      console.error("Error clearing cart cache:", error);
+    }
+  };
+
   // Migrate default categories if none exist
   React.useEffect(() => {
     if (categories && categories.length === 0 && user?.userId) {
-      migrateDefaults({ userId: user.userId })
+      migrateDefaults({ userId: user.userId, businessType: user.businessType })
         .then(() => console.log("Default categories migrated"))
         .catch(console.error);
     }
-  }, [categories, user?.userId]);
+  }, [categories, user?.userId, user?.businessType]);
 
   // Group products by category with quantity state
   const productsByCategory = useMemo(() => {
@@ -247,19 +308,7 @@ export default function CounterScreen() {
         >
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.dateButton}
-          onPress={() => setShowDatePicker(true)}
-        >
-          <Calendar color={COLORS.white} size={18} />
-          <Text style={styles.dateText}>
-            {selectedDate.toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })}
-          </Text>
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Sales Entry</Text>
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={styles.iconButton}
@@ -280,6 +329,20 @@ export default function CounterScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {/* Date Selector */}
+        <TouchableOpacity
+          style={styles.dateSelector}
+          onPress={() => setShowDatePicker(true)}
+        >
+          <Calendar color={COLORS.primaryBlue} size={18} />
+          <Text style={styles.dateSelectorText}>
+            {selectedDate.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </Text>
+        </TouchableOpacity>
         {categories.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>No categories yet</Text>
@@ -357,10 +420,12 @@ export default function CounterScreen() {
                 )
                 .filter((item: { qty: number }) => item.qty > 0);
 
+              const saleDateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`;
               router.push({
                 pathname: "/checkout",
                 params: {
                   cartData: JSON.stringify(cartItems),
+                  saleDate: saleDateStr,
                 },
               });
             }
@@ -511,6 +576,22 @@ const styles = StyleSheet.create({
     minHeight: "100%",
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
+  },
+
+  dateSelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
+    marginBottom: 20,
+  },
+  dateSelectorText: {
+    color: COLORS.primaryBlue,
+    fontSize: 16,
+    fontWeight: "600",
   },
 
   sectionHeader: {

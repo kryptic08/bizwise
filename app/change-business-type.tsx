@@ -5,6 +5,7 @@ import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -21,6 +22,7 @@ const COLORS = {
   white: "#ffffff",
   textDark: "#1f2937",
   textGray: "#6b7280",
+  red: "#ef4444",
 };
 
 const BUSINESS_DESCRIPTIONS: Record<BusinessType, string> = {
@@ -39,22 +41,36 @@ export default function ChangeBusinessTypeScreen() {
     (user?.businessType as BusinessType) ?? "Others",
   );
   const [isSaving, setIsSaving] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const updateBusinessType = useMutation(api.users.updateBusinessType);
+  const migrateDefaults = useMutation(api.categories.migrateDefaultCategories);
 
-  const handleSave = async () => {
-    if (!user?.userId) return;
-
+  const handleSavePress = () => {
     if (selected === user?.businessType) {
       router.back();
       return;
     }
+    setShowConfirmModal(true);
+  };
 
+  const handleConfirmChange = async () => {
+    if (!user?.userId) return;
+
+    setShowConfirmModal(false);
     setIsSaving(true);
     try {
+      // Update business type
       await updateBusinessType({
         userId: user.userId,
         businessType: selected,
+      });
+
+      // Reset categories for new business type
+      await migrateDefaults({
+        userId: user.userId,
+        businessType: selected,
+        forceReset: true,
       });
 
       // Persist updated business type to local auth state
@@ -152,7 +168,7 @@ export default function ChangeBusinessTypeScreen() {
 
         <TouchableOpacity
           style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}
-          onPress={handleSave}
+          onPress={handleSavePress}
           disabled={isSaving}
         >
           {isSaving ? (
@@ -162,6 +178,41 @@ export default function ChangeBusinessTypeScreen() {
           )}
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Confirmation Modal */}
+      <Modal
+        visible={showConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowConfirmModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Change Business Type?</Text>
+            <Text style={styles.modalText}>
+              Changing your business type to "{selected}" will remove your current product categories. 
+              New default categories will be created based on your new business type.
+            </Text>
+            <Text style={styles.modalWarning}>
+              This action cannot be undone.
+            </Text>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={() => setShowConfirmModal(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalConfirmButton]}
+                onPress={handleConfirmChange}
+              >
+                <Text style={styles.modalConfirmText}>Change</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -302,5 +353,63 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 16,
     fontWeight: "700",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    padding: 24,
+    width: "100%",
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: COLORS.textDark,
+    marginBottom: 12,
+  },
+  modalText: {
+    fontSize: 14,
+    color: COLORS.textGray,
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  modalWarning: {
+    fontSize: 14,
+    color: COLORS.red,
+    fontWeight: "600",
+    marginBottom: 20,
+  },
+  modalActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  modalCancelButton: {
+    backgroundColor: COLORS.lightBlueBg,
+  },
+  modalCancelText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: COLORS.textDark,
+  },
+  modalConfirmButton: {
+    backgroundColor: COLORS.red,
+  },
+  modalConfirmText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: COLORS.white,
   },
 });

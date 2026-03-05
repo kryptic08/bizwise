@@ -16,6 +16,7 @@ import {
 import React, { useMemo, useState } from "react";
 import {
   FlatList,
+  ActivityIndicator,
   Modal,
   Platform,
   StatusBar,
@@ -28,8 +29,8 @@ import { OfflineIndicator } from "../components/OfflineIndicator";
 import { SyncBadge } from "../components/SyncBadge";
 import { useAuth } from "../context/AuthContext";
 import {
+  useAllTransactions,
   useFinancialSummary,
-  useTransactions,
 } from "../hooks/useOfflineQueries";
 
 // --- Colors (Consistent with Dashboard) ---
@@ -42,6 +43,7 @@ const COLORS = {
   green: "#2ecc71", // For income/positive
   red: "#ff5c5c", // For expense/negative
   iconBlueBg: "#89b3eb", // Light blue circle for list icons
+  borderLight: "#e5e7eb",
 };
 
 // --- Types ---
@@ -90,10 +92,10 @@ export default function TransactionScreen() {
   );
 
   // Helper function to parse transaction date
-  // Handles backend format: "Feb 25, 2026" → local midnight for correct comparison
+  // Handles backend format: "Feb/25/2026" → local midnight for correct comparison
   const parseTransactionDate = (dateStr: string): Date | null => {
     try {
-      // Handle "Mon DD, YYYY" format from backend (e.g. "Feb 25, 2026")
+      // Handle "MMM/DD/YYYY" format from backend (e.g. "Feb/25/2026")
       const monthNames: Record<string, number> = {
         Jan: 0,
         Feb: 1,
@@ -108,7 +110,7 @@ export default function TransactionScreen() {
         Nov: 10,
         Dec: 11,
       };
-      const named = dateStr.match(/^(\w{3})\s+(\d{1,2}),\s+(\d{4})$/);
+      const named = dateStr.match(/^(\w{3})\/(\d{1,2})\/(\d{4})$/);
       if (named) {
         const month = monthNames[named[1]];
         if (month !== undefined) {
@@ -131,13 +133,20 @@ export default function TransactionScreen() {
     }
   };
 
-  // Pagination state
-  const [cursor, setCursor] = useState<number | undefined>(undefined);
+  // Frontend pagination state
+  const ITEMS_PER_PAGE = 15;
+  const [currentPage, setCurrentPage] = useState(1);
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  // Fetch transactions with offline caching
-  const { data: paginatedData } = useTransactions(user?.userId, 20, cursor);
+  // Fetch all transactions with offline caching
+  const { data: allData } = useAllTransactions(user?.userId);
+
+  // Update transactions when data arrives
+  React.useEffect(() => {
+    if (allData) {
+      setAllTransactions(allData);
+    }
+  }, [allData]);
 
   // Fetch financial summary with offline caching
   const { data: financialSummary } = useFinancialSummary(user?.userId);
@@ -163,11 +172,8 @@ export default function TransactionScreen() {
   }, [allTransactions, startDate, endDate]);
 
   const formatDateDisplay = (date: Date) => {
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "2-digit",
-    });
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${months[date.getMonth()]}/${date.getDate()}/${date.getFullYear()}`;
   };
 
   // Quick date filter presets
@@ -213,53 +219,47 @@ export default function TransactionScreen() {
   const [filterType, setFilterType] = useState<TransactionType | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Update transactions when new data arrives
+  // Reset page when date filter changes
   React.useEffect(() => {
-    if (paginatedData?.transactions) {
-      if (cursor === undefined) {
-        setAllTransactions(paginatedData.transactions);
-      } else {
-        setAllTransactions((prev) => {
-          const existingIds = new Set(prev.map((t: Transaction) => t.id));
-          const newTransactions = paginatedData.transactions.filter(
-            (t: Transaction) => !existingIds.has(t.id),
-          );
-          return [...prev, ...newTransactions];
-        });
-      }
-      setIsLoadingMore(false);
-    }
-  }, [paginatedData, cursor]);
-
-  // Debug: log transactions as they arrive
-  console.log(
-    "Received transactions:",
-    paginatedData?.transactions?.map((t: Transaction) => ({
-      type: t.type,
-      id: t.transactionId,
-      time: t.time,
-      sortKey: t.sortKey,
-    })),
-  );
+    setCurrentPage(1);
+  }, [startDate, endDate]);
 
   const toggleFilter = (type: TransactionType) => {
     setFilterType((prev) => (prev === type ? "all" : type));
     setExpandedId(null);
-    // Don't reset pagination - just filter the existing data
   };
 
   const handleTransactionPress = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
   };
 
+  const totalFilteredItems = allTransactions
+    ? allTransactions.filter((t) => {
+        const txDate = parseTransactionDate(t.date);
+        return txDate && txDate >= startDate && txDate < endDate;
+      }).length
+    : 0;
+
+  const totalPages = Math.ceil(totalFilteredItems / ITEMS_PER_PAGE);
+  const hasMore = currentPage < totalPages;
+
   const handleLoadMore = () => {
-    if (paginatedData?.hasMore && !isLoadingMore && paginatedData?.nextCursor) {
-      setIsLoadingMore(true);
-      setCursor(paginatedData.nextCursor);
+    if (hasMore) {
+      setCurrentPage(prev => prev + 1);
     }
   };
 
-  // Filter transactions - data comes pre-sorted from backend by recency
+  const handlePrevious = () => {
+    if (currentPage > 1) {
+      setCurrentPage(prev => prev - 1);
+    }
+  };
+
+  const handleFirstPage = () => {
+    setCurrentPage(1);
+  };
+
+  // Filter transactions and sort by date (newest first)
   const filteredTransactions = allTransactions
     ? allTransactions
         .filter((t) => {
@@ -267,7 +267,18 @@ export default function TransactionScreen() {
           return txDate && txDate >= startDate && txDate < endDate;
         })
         .filter((t) => filterType === "all" || t.type === filterType)
+        .sort((a, b) => {
+          const dateA = parseTransactionDate(a.date)?.getTime() || 0;
+          const dateB = parseTransactionDate(b.date)?.getTime() || 0;
+          return dateB - dateA; // Sort newest first
+        })
     : [];
+
+  // Frontend pagination - slice the filtered transactions
+  const paginatedTransactions = filteredTransactions.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
   const renderItem = ({
     item,
@@ -389,7 +400,7 @@ export default function TransactionScreen() {
   };
 
   // Show loading state
-  if (paginatedData === undefined && allTransactions.length === 0) {
+  if (allData === undefined && allTransactions.length === 0) {
     return (
       <View
         style={[
@@ -509,20 +520,46 @@ export default function TransactionScreen() {
 
         {/* Transaction List */}
         <FlatList
-          data={filteredTransactions}
+          data={paginatedTransactions}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContainer}
-          onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
-          ListFooterComponent={() =>
-            isLoadingMore ? (
-              <View style={styles.loadingMore}>
-                <Text style={styles.loadingMoreText}>Loading more...</Text>
-              </View>
-            ) : null
-          }
+          ListFooterComponent={() => (
+            <View style={styles.paginationFooter}>
+              <TouchableOpacity
+                style={[styles.paginationButton, currentPage === 1 && styles.paginationButtonDisabled]}
+                onPress={handleFirstPage}
+                disabled={currentPage === 1}
+              >
+                <Text style={[styles.paginationButtonText, currentPage === 1 && styles.paginationButtonTextDisabled]}>
+                  First
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.paginationButton, currentPage === 1 && styles.paginationButtonDisabled]}
+                onPress={handlePrevious}
+                disabled={currentPage === 1}
+              >
+                <Text style={[styles.paginationButtonText, currentPage === 1 && styles.paginationButtonTextDisabled]}>
+                  Prev
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.pageIndicator}>Page {currentPage} of {totalPages || 1}</Text>
+
+              <TouchableOpacity
+                style={[styles.paginationButton, !hasMore && styles.paginationButtonDisabled]}
+                onPress={handleLoadMore}
+                disabled={!hasMore}
+              >
+                <Text style={[styles.paginationButtonText, !hasMore && styles.paginationButtonTextDisabled]}>
+                  Next
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
           ListEmptyComponent={() => {
             const now = new Date();
             now.setHours(0, 0, 0, 0);
@@ -534,14 +571,14 @@ export default function TransactionScreen() {
             return (
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>
-                  {paginatedData === undefined
+                  {allData === undefined
                     ? "Loading transactions..."
                     : isToday
                       ? "No transactions yet today"
                       : "No transactions found"}
                 </Text>
                 <Text style={styles.emptySubtext}>
-                  {paginatedData !== undefined &&
+                  {allData !== undefined &&
                     (isToday
                       ? "Start making sales or adding expenses to see them here."
                       : "Try adjusting your date filter.")}
@@ -822,7 +859,15 @@ const styles = StyleSheet.create({
   // List
   listContainer: {
     paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  paginationFooter: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 25,
     paddingBottom: 100,
+    gap: 15,
   },
   transactionCard: {
     backgroundColor: COLORS.white,
@@ -1230,5 +1275,40 @@ const styles = StyleSheet.create({
     color: COLORS.textGray,
     fontWeight: "300",
     paddingBottom: 4,
+  },
+  // Pagination styles
+  paginationContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    backgroundColor: COLORS.white,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderLight,
+  },
+  paginationButton: {
+    backgroundColor: COLORS.primaryBlue,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    minWidth: 75,
+    alignItems: "center",
+  },
+  paginationButtonDisabled: {
+    backgroundColor: COLORS.borderLight,
+  },
+  paginationButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.white,
+  },
+  paginationButtonTextDisabled: {
+    color: COLORS.textGray,
+  },
+  pageIndicator: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.textDark,
   },
 });

@@ -1,4 +1,5 @@
 import { HelpTooltip } from "@/components/HelpTooltip";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
@@ -121,6 +122,53 @@ export default function AddExpenseScreen() {
   const lottieRef = useRef<LottieView>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const EXPENSE_CACHE_KEY = "bizwise_expense_cache";
+
+  useEffect(() => {
+    const loadSavedExpenses = async () => {
+      try {
+        const savedData = await AsyncStorage.getItem(EXPENSE_CACHE_KEY);
+        if (savedData) {
+          const parsed = JSON.parse(savedData);
+          if (parsed.expenses && parsed.expenses.length > 0) {
+            setExpenses(parsed.expenses);
+          }
+          if (parsed.selectedDate) {
+            setSelectedDate(new Date(parsed.selectedDate));
+          }
+        }
+      } catch (error) {
+        console.error("Error loading saved expenses:", error);
+      }
+    };
+    loadSavedExpenses();
+  }, []);
+
+  useEffect(() => {
+    const saveExpenses = async () => {
+      try {
+        await AsyncStorage.setItem(
+          EXPENSE_CACHE_KEY,
+          JSON.stringify({
+            expenses,
+            selectedDate: selectedDate.toISOString(),
+          }),
+        );
+      } catch (error) {
+        console.error("Error saving expenses:", error);
+      }
+    };
+    saveExpenses();
+  }, [expenses, selectedDate]);
+
+  const clearSavedExpenses = async () => {
+    try {
+      await AsyncStorage.removeItem(EXPENSE_CACHE_KEY);
+    } catch (error) {
+      console.error("Error clearing saved expenses:", error);
+    }
+  };
+
   const getCurrentDate = () => {
     return selectedDate.toLocaleDateString("en-US", {
       month: "short",
@@ -206,10 +254,10 @@ export default function AddExpenseScreen() {
     setExpenses(
       expenses.map((item) => {
         if (item.id === id) {
-          // Prevent editing locked OCR fields
+          // Prevent editing locked OCR fields (category, amount, quantity)
           if (
             item.isOcrSource &&
-            (field === "title" || field === "amount" || field === "quantity")
+            (field === "category" || field === "amount" || field === "quantity")
           ) {
             return item;
           }
@@ -225,8 +273,8 @@ export default function AddExpenseScreen() {
             updated.total = (amount * quantity).toFixed(2);
           }
 
-          // Auto-categorize when the title changes on a manual (non-OCR) item
-          if (field === "title" && !item.isOcrSource) {
+          // Auto-categorize when the title changes
+          if (field === "title") {
             const trimmed = value.trim();
             if (trimmed.length >= 3) {
               updated.category = categorizeItemForBusiness(
@@ -292,11 +340,13 @@ export default function AddExpenseScreen() {
                 return;
               }
 
-              // Create expense online
+              // Create expense online - use local date in YYYY-MM-DD format
+              const expenseDateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`;
               const result = await createExpense({
                 items,
                 userId: user?.userId || "",
                 clientTimestamp: Date.now(),
+                expenseDate: expenseDateStr,
               });
 
               const tempId = result.transactionId;
@@ -315,6 +365,7 @@ export default function AddExpenseScreen() {
               setCapturedImage(null);
               setScanComplete(false);
               setScanError(false);
+              clearSavedExpenses();
 
               // Show appropriate message based on online status
               if (isOnline) {
@@ -1068,7 +1119,9 @@ If no items found or image is unclear, return: []`;
           <TouchableOpacity style={styles.headerButton}>
             <HelpTooltip
               title="Add Expense Help"
-              content="Add business expenses manually or scan receipts with your camera. The OCR scanner will automatically extract item details. You can add multiple items, edit quantities and prices, then save all at once."
+              content="Add business expenses manually or scan receipts with your camera. The OCR scanner will automatically extract item details. You can add multiple items, edit quantities and prices, then save all at once.
+
+                If an expense is scanned via OCR, fields may be locked to preserve data inetgrity. To make corrections, rescan the receipt or create a manual entry."
             />
           </TouchableOpacity>
         </View>
@@ -1112,23 +1165,15 @@ If no items found or image is unclear, return: []`;
                 </TouchableOpacity>
               )}
 
-              {/* OCR Badge */}
-              {item.isOcrSource && (
-                <View style={styles.ocrBadgeRow}>
-                  <Lock size={12} color={COLORS.primaryBlue} />
-                  <Text style={styles.ocrBadgeText}>
-                    Scanned via OCR — fields are locked to preserve data
-                    integrity. To make corrections, rescan or create a new
-                    manual entry.
-                  </Text>
-                </View>
-              )}
-
-              {/* Category Dropdown (always editable) */}
+              {/* Category Dropdown (locked for OCR items) */}
               <Text style={styles.inputLabel}>Category</Text>
               <TouchableOpacity
-                style={styles.dropdownInput}
-                onPress={() => openCategoryPicker(item.id)}
+                style={[
+                  styles.dropdownInput,
+                  item.isOcrSource && styles.lockedInput,
+                ]}
+                onPress={() => !item.isOcrSource && openCategoryPicker(item.id)}
+                disabled={item.isOcrSource}
               >
                 <Text
                   style={[
@@ -1138,7 +1183,10 @@ If no items found or image is unclear, return: []`;
                 >
                   {item.category || "Select Category"}
                 </Text>
-                <ChevronDown color={COLORS.textGray} size={20} />
+                {!item.isOcrSource && (
+                  <ChevronDown color={COLORS.textGray} size={20} />
+                )}
+                {item.isOcrSource && <Lock size={16} color={COLORS.textGray} />}
               </TouchableOpacity>
 
               {/* Expense Title */}
@@ -1149,23 +1197,12 @@ If no items found or image is unclear, return: []`;
                     Auto-categorized ↓
                   </Text>
                 ) : null}
-                {item.isOcrSource && (
-                  <Lock
-                    size={12}
-                    color={COLORS.textGray}
-                    style={{ marginLeft: 4 }}
-                  />
-                )}
               </View>
               <TextInput
-                style={[
-                  styles.textInput,
-                  item.isOcrSource && styles.lockedInput,
-                ]}
+                style={styles.textInput}
                 placeholder="Enter expense title"
                 placeholderTextColor={COLORS.textGray}
                 value={item.title}
-                editable={!item.isOcrSource}
                 onChangeText={(value) =>
                   updateExpenseItem(item.id, "title", value)
                 }

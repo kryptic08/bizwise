@@ -78,7 +78,11 @@ export const addExpense = mutation({
     // Use client timestamp if provided, otherwise use server time
     const timestamp = args.clientTimestamp || Date.now();
     const now = new Date(timestamp);
-    const date = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    // Extract date components - the client timestamp is already in local time
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const date = `${year}-${month}-${day}`;
     const time = now.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -98,7 +102,7 @@ export const addExpense = mutation({
       receiptImageStorageId: args.receiptImageStorageId,
       receiptImage: args.receiptImage,
       ocrText: args.ocrText,
-      createdAt: Date.now(),
+      createdAt: timestamp,
     });
 
     // Add the single item
@@ -131,12 +135,35 @@ export const addExpenseGroup = mutation({
     receiptImage: v.optional(v.string()), // Legacy: local URI
     ocrText: v.optional(v.string()),
     clientTimestamp: v.optional(v.number()), // Device timestamp
+    expenseDate: v.optional(v.string()), // Selected date in YYYY-MM-DD format
   },
   handler: async (ctx, args) => {
-    // Use client timestamp if provided, otherwise use server time
-    const timestamp = args.clientTimestamp || Date.now();
-    const now = new Date(timestamp);
-    const date = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    // Use expenseDate if provided, otherwise derive from clientTimestamp or server time
+    let date: string;
+    let timestamp: number;
+    let now: Date;
+
+    if (args.expenseDate) {
+      // When expenseDate is provided, use that date for both date and createdAt
+      date = args.expenseDate;
+      // Parse the expenseDate and get timestamp for that date (use clientTimestamp or current time)
+      const clientTs = args.clientTimestamp || Date.now();
+      now = new Date(clientTs);
+      // Set the date to the selected date while keeping the time
+      now.setFullYear(parseInt(args.expenseDate.split("-")[0]));
+      now.setMonth(parseInt(args.expenseDate.split("-")[1]) - 1);
+      now.setDate(parseInt(args.expenseDate.split("-")[2]));
+      timestamp = now.getTime();
+    } else {
+      timestamp = args.clientTimestamp || Date.now();
+      now = new Date(timestamp);
+      // Extract date components - the client timestamp is already in local time
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      date = `${year}-${month}-${day}`;
+    }
+
     const time = now.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -161,7 +188,7 @@ export const addExpenseGroup = mutation({
       receiptImageStorageId: args.receiptImageStorageId,
       receiptImage: args.receiptImage,
       ocrText: args.ocrText,
-      createdAt: Date.now(),
+      createdAt: timestamp,
     });
 
     // Add all expense items

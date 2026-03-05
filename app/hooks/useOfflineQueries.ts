@@ -186,6 +186,15 @@ export function useCategories(userId: string | undefined) {
   return useOfflineCached(live, userId ? `categories_${userId}` : undefined);
 }
 
+// Hook for all transactions (no pagination - for frontend pagination)
+export function useAllTransactions(userId: string | undefined) {
+  const live = useQuery(
+    api.analytics.getCombinedTransactions,
+    userId ? { userId: userId as UserId } : "skip",
+  );
+  return useOfflineCached(live, userId ? `all_transactions_${userId}` : undefined);
+}
+
 // Hook for paginated transactions (reactive – new sales/expenses appear immediately)
 export function useTransactions(
   userId: string | undefined,

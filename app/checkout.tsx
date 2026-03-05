@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Minus, Plus } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
@@ -5,6 +6,8 @@ import {
   Alert,
   Dimensions,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -34,7 +37,7 @@ const COLORS = {
 
 export default function CheckoutScreen() {
   const router = useRouter();
-  const { cartData } = useLocalSearchParams();
+  const { cartData, saleDate } = useLocalSearchParams();
   const { user } = useAuth();
   const { isOnline } = useOffline();
   const { createSale } = useMutationQueue();
@@ -114,18 +117,24 @@ export default function CheckoutScreen() {
         return;
       }
 
-      // Create sale online
+      // Create sale online - always send today's date in YYYY-MM-DD format
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
       const result = await createSale({
         items: saleItems,
         paymentReceived: received,
         userId: user?.userId || "",
         clientTimestamp: Date.now(),
+        saleDate: saleDate ? saleDate as string : todayStr,
       });
 
       const tempId = result.transactionId;
 
       // Check if this is the first sale and send celebration
       checkFirstSale(true).catch(console.error);
+
+      // Set flag to clear cart cache when returning to counter
+      await AsyncStorage.setItem("bizwise_checkout_complete", "true");
 
       // Show appropriate message based on online status
       if (isOnline) {
@@ -226,7 +235,11 @@ export default function CheckoutScreen() {
       </View>
 
       {/* Main Content */}
-      <View style={styles.contentContainer}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.keyboardAvoidingView}
+      >
+        <View style={styles.contentContainer}>
         {/* Scrollable Order Section */}
         <View style={styles.orderSection}>
           <ScrollView
@@ -313,7 +326,8 @@ export default function CheckoutScreen() {
             {isProcessing ? "Processing..." : "Complete Transaction"}
           </Text>
         </TouchableOpacity>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -356,6 +370,9 @@ const styles = StyleSheet.create({
   contentContainer: {
     flex: 1,
     backgroundColor: COLORS.white,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
   },
   orderSection: {
     flex: 1,

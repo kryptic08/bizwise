@@ -104,25 +104,6 @@ export default function HomeScreen() {
   const { data: topCategory } = useTopCategory(user?.userId);
   const { data: targetProgress } = useTargetProgress(user?.userId);
 
-  // Calculate today's sales and expenses from daily analytics
-  const todayTotals = useMemo(() => {
-    // Use UTC date directly – sales are stored with UTC dates via toISOString()
-    // Do NOT call setHours(0,0,0,0) before toISOString(): that converts local
-    // midnight to UTC, giving the wrong date for UTC+8 users all day long.
-    const todayStr = new Date().toISOString().split("T")[0];
-
-    if (!dailyAnalytics) return { sales: 0, expenses: 0 };
-
-    const todayData = dailyAnalytics.find(
-      (day: { date: string }) => day.date === todayStr,
-    );
-
-    return {
-      sales: todayData ? todayData.income : 0,
-      expenses: todayData ? todayData.expense : 0,
-    };
-  }, [dailyAnalytics]);
-
   // Check target progress and trigger notifications
   useEffect(() => {
     if (!targetProgress || !user?.userId) return;
@@ -671,7 +652,7 @@ export default function HomeScreen() {
             />
           </View>
 
-          {/* Balance Cards */}
+          {/* Balance Cards - Period based on active tab */}
           <View style={styles.balanceRow}>
             <Pressable
               style={styles.card}
@@ -681,13 +662,21 @@ export default function HomeScreen() {
               <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
                 <View style={styles.cardHeader}>
                   <Wallet size={14} color={COLORS.textGray} />
-                  <Text style={styles.cardLabel}> Sales</Text>
+                  <Text style={styles.cardLabel}>
+                    {" "}
+                    {activeTab === "Daily"
+                      ? "This Week"
+                      : activeTab === "Weekly"
+                        ? "This Month"
+                        : "This Year"}{" "}
+                    Sales
+                  </Text>
                 </View>
                 <Text
                   style={[styles.amountText, { color: COLORS.primaryBlue }]}
                 >
                   ₱
-                  {todayTotals.sales.toLocaleString("en-US", {
+                  {periodTotals.sales.toLocaleString("en-US", {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}
@@ -702,11 +691,19 @@ export default function HomeScreen() {
               <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
                 <View style={styles.cardHeader}>
                   <Receipt size={14} color={COLORS.textGray} />
-                  <Text style={styles.cardLabel}> Expenses</Text>
+                  <Text style={styles.cardLabel}>
+                    {" "}
+                    {activeTab === "Daily"
+                      ? "This Week"
+                      : activeTab === "Weekly"
+                        ? "This Month"
+                        : "This Year"}{" "}
+                    Expenses
+                  </Text>
                 </View>
                 <Text style={[styles.amountText, { color: COLORS.textDark }]}>
                   ₱
-                  {todayTotals.expenses.toLocaleString("en-US", {
+                  {periodTotals.expenses.toLocaleString("en-US", {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}
@@ -715,7 +712,7 @@ export default function HomeScreen() {
             </Pressable>
           </View>
 
-          {/* Highlights */}
+          {/* Highlights - Period based */}
           <View style={styles.highlightCard}>
             <View style={styles.highlightItem}>
               <View style={styles.iconBoxBlue}>
@@ -723,6 +720,9 @@ export default function HomeScreen() {
               </View>
               <View>
                 <Text style={styles.highlightLabel}>Top selling product</Text>
+                <Text style={[styles.highlightPeriodLabel, { marginBottom: 2 }]}>
+                  {activeTab === "Daily" ? "this week" : activeTab === "Weekly" ? "this month" : "this year"}
+                </Text>
                 <Text style={styles.highlightValue}>
                   {topProduct?.name
                     ? topProduct.name.toLowerCase().includes("add-on") ||
@@ -741,6 +741,9 @@ export default function HomeScreen() {
               </View>
               <View>
                 <Text style={styles.highlightLabel}>Top selling category</Text>
+                <Text style={styles.highlightPeriodLabel}>
+                  {activeTab === "Daily" ? "this week" : activeTab === "Weekly" ? "this month" : "this year"}
+                </Text>
                 <Text style={styles.highlightValue}>
                   {topCategory?.name
                     ? topCategory.name.toLowerCase().includes("add-on") ||
@@ -1365,6 +1368,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: COLORS.textGray,
     marginBottom: 2,
+  },
+  highlightPeriodLabel: {
+    fontSize: 9,
+    color: COLORS.primaryBlue,
+    fontStyle: "italic",
   },
   highlightValue: {
     fontSize: 12,

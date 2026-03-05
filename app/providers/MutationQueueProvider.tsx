@@ -18,6 +18,7 @@ export interface SaleData {
   items: SaleItem[];
   paymentReceived: number;
   clientTimestamp: number;
+  saleDate?: string;
 }
 
 export interface ExpenseItemData {
@@ -33,6 +34,7 @@ export interface ExpenseData {
   items: ExpenseItemData[];
   clientTimestamp: number;
   receiptImageStorageId?: string;
+  expenseDate?: string;
 }
 
 interface MutationQueueContextType {
@@ -63,6 +65,7 @@ export function MutationQueueProvider({
         items: data.items as any,
         paymentReceived: data.paymentReceived,
         clientTimestamp: data.clientTimestamp,
+        saleDate: data.saleDate,
       });
       queryClient.invalidateQueries({ queryKey: ["sales"] });
       queryClient.invalidateQueries({ queryKey: ["transactions"] });
@@ -81,6 +84,7 @@ export function MutationQueueProvider({
         items: data.items as any,
         clientTimestamp: data.clientTimestamp,
         receiptImageStorageId: data.receiptImageStorageId as any,
+        expenseDate: data.expenseDate,
       });
       queryClient.invalidateQueries({ queryKey: ["expenses"] });
       queryClient.invalidateQueries({ queryKey: ["transactions"] });

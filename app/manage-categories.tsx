@@ -2,18 +2,35 @@ import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import {
   ArrowLeft,
-  Cake,
+  Book,
+  Box,
+  Briefcase,
+  Car,
   Check,
   Coffee,
+  Computer,
   Cookie,
   Edit,
+  Hammer,
+  Heart,
+  Home,
   IceCream,
+  Laptop,
+  Package,
+  Palette,
+  Phone,
   Pizza,
   Plus,
-  Sandwich,
+  Printer,
+  RefreshCw,
+  Scissors,
   ShoppingBag,
+  Smartphone,
+  Sparkles,
   Trash2,
+  Truck,
   Utensils,
+  Wrench,
 } from "lucide-react-native";
 import React, { useState } from "react";
 import {
@@ -47,11 +64,141 @@ const ICON_OPTIONS = [
   { name: "Coffee", component: Coffee },
   { name: "Utensils", component: Utensils },
   { name: "ShoppingBag", component: ShoppingBag },
-  { name: "Cake", component: Cake },
   { name: "IceCream", component: IceCream },
   { name: "Pizza", component: Pizza },
-  { name: "Sandwich", component: Sandwich },
+  { name: "Package", component: Package },
+  { name: "Box", component: Box },
+  { name: "Truck", component: Truck },
+  { name: "Book", component: Book },
+  { name: "Scissors", component: Scissors },
+  { name: "Hammer", component: Hammer },
+  { name: "Wrench", component: Wrench },
+  { name: "Printer", component: Printer },
+  { name: "Computer", component: Computer },
+  { name: "Smartphone", component: Smartphone },
+  { name: "Laptop", component: Laptop },
+  { name: "Car", component: Car },
+  { name: "Home", component: Home },
+  { name: "Briefcase", component: Briefcase },
+  { name: "Heart", component: Heart },
+  { name: "Sparkles", component: Sparkles },
+  { name: "Palette", component: Palette },
+  { name: "RefreshCw", component: RefreshCw },
+  { name: "Phone", component: Phone },
 ];
+
+// Suggested categories based on business type
+const SUGGESTED_CATEGORIES: Record<
+  string,
+  { name: string; icon: string; color: string }[]
+> = {
+  "Food Business": [
+    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
+    { name: "Meals", icon: "Utensils", color: "#FF6B6B" },
+    { name: "Desserts", icon: "IceCream", color: "#FD79A8" },
+  ],
+  "Meat Shop": [
+    { name: "Chicken", icon: "Package", color: "#FF6B6B" },
+    { name: "Pork", icon: "Box", color: "#F38181" },
+    { name: "Beef", icon: "Truck", color: "#AA96DA" },
+    { name: "Seafood", icon: "Truck", color: "#4ECDC4" },
+  ],
+  Retail: [
+    { name: "Essentials", icon: "ShoppingBag", color: "#FF6B6B" },
+    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Beverages", icon: "Coffee", color: "#6C5CE7" },
+    { name: "Household", icon: "Home", color: "#4ECDC4" },
+  ],
+  "Convenience Store": [
+    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
+    { name: "Daily Needs", icon: "ShoppingBag", color: "#FF6B6B" },
+    { name: "Household", icon: "Home", color: "#4ECDC4" },
+  ],
+  "Sari-Sari Store": [
+    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
+    { name: "Sundries", icon: "ShoppingBag", color: "#FF6B6B" },
+    { name: "Canned Goods", icon: "Box", color: "#95E1D3" },
+  ],
+  Bakery: [
+    { name: "Bread", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Pastries", icon: "IceCream", color: "#FD79A8" },
+    { name: "Cakes", icon: "Sparkles", color: "#AA96DA" },
+    { name: "Beverages", icon: "Coffee", color: "#6C5CE7" },
+  ],
+  "Coffee Shop": [
+    { name: "Coffee", icon: "Coffee", color: "#6C5CE7" },
+    { name: "Tea", icon: "Utensils", color: "#4ECDC4" },
+    { name: "Pastries", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Snacks", icon: "Box", color: "#FF6B6B" },
+  ],
+  "Water Station": [
+    { name: "Refill", icon: "RefreshCw", color: "#4ECDC4" },
+    { name: "Gallons", icon: "Box", color: "#95E1D3" },
+    { name: "Supplies", icon: "Package", color: "#FF6B6B" },
+  ],
+  "Laundry Shop": [
+    { name: "Wash", icon: "RefreshCw", color: "#4ECDC4" },
+    { name: "Dry Clean", icon: "Sparkles", color: "#AA96DA" },
+    { name: "Supplies", icon: "Package", color: "#FF6B6B" },
+  ],
+  "Internet Cafe": [
+    { name: "Computer", icon: "Computer", color: "#6C5CE7" },
+    { name: "Printing", icon: "Printer", color: "#FF6B6B" },
+    { name: "Wifi", icon: "Phone", color: "#4ECDC4" },
+  ],
+  "Beauty Salon": [
+    { name: "Hair Care", icon: "Scissors", color: "#FF6B6B" },
+    { name: "Skin Care", icon: "Heart", color: "#FD79A8" },
+    { name: "Nails", icon: "Sparkles", color: "#AA96DA" },
+    { name: "Products", icon: "Package", color: "#FDCB6E" },
+  ],
+  "Repair Shop": [
+    { name: "Parts", icon: "Box", color: "#FF6B6B" },
+    { name: "Tools", icon: "Hammer", color: "#4ECDC4" },
+    { name: "Services", icon: "Wrench", color: "#6C5CE7" },
+  ],
+  Pharmacy: [
+    { name: "Medicines", icon: "Package", color: "#FF6B6B" },
+    { name: "Supplies", icon: "Box", color: "#4ECDC4" },
+    { name: "Wellness", icon: "Heart", color: "#FD79A8" },
+  ],
+  Hardware: [
+    { name: "Materials", icon: "Hammer", color: "#FF6B6B" },
+    { name: "Tools", icon: "Wrench", color: "#4ECDC4" },
+    { name: "Paints", icon: "Palette", color: "#FDCB6E" },
+    { name: "Electrical", icon: "Phone", color: "#6C5CE7" },
+  ],
+  "Computer Shop": [
+    { name: "Parts", icon: "Computer", color: "#6C5CE7" },
+    { name: "Accessories", icon: "Smartphone", color: "#4ECDC4" },
+    { name: "Services", icon: "Wrench", color: "#FF6B6B" },
+  ],
+  "Mobile Shop": [
+    { name: "Phones", icon: "Smartphone", color: "#6C5CE7" },
+    { name: "Accessories", icon: "Package", color: "#4ECDC4" },
+    { name: "Repairs", icon: "Wrench", color: "#FF6B6B" },
+  ],
+  "Printing Services": [
+    { name: "Printing", icon: "Printer", color: "#FF6B6B" },
+    { name: "Supplies", icon: "Box", color: "#FDCB6E" },
+    { name: "Services", icon: "Briefcase", color: "#6C5CE7" },
+  ],
+  Construction: [
+    { name: "Materials", icon: "Hammer", color: "#FF6B6B" },
+    { name: "Tools", icon: "Wrench", color: "#4ECDC4" },
+    { name: "Electrical", icon: "Phone", color: "#6C5CE7" },
+    { name: "Plumbing", icon: "Truck", color: "#95E1D3" },
+  ],
+  default: [
+    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
+    { name: "Essentials", icon: "ShoppingBag", color: "#FF6B6B" },
+    { name: "Supplies", icon: "Package", color: "#4ECDC4" },
+  ],
+};
 
 const COLOR_OPTIONS = [
   "#FF6B6B",
@@ -97,11 +244,11 @@ export default function ManageCategoriesScreen() {
   // Migrate default categories if none exist
   React.useEffect(() => {
     if (categories && categories.length === 0 && user?.userId) {
-      migrateDefaults({ userId: user.userId })
+      migrateDefaults({ userId: user.userId, businessType: user.businessType })
         .then(() => console.log("Default categories migrated"))
         .catch(console.error);
     }
-  }, [categories, user?.userId]);
+  }, [categories, user?.userId, user?.businessType]);
 
   const handleSaveCategory = async () => {
     if (!categoryName.trim()) {
@@ -355,6 +502,58 @@ export default function ManageCategoriesScreen() {
             </View>
 
             <ScrollView style={styles.modalBody}>
+              {/* Suggested Categories for Business Type */}
+              {!editingCategoryId && (
+                <>
+                  <Text style={styles.inputLabel}>
+                    Quick Add (Suggestions for{" "}
+                    {user?.businessType || "Your Business"})
+                  </Text>
+                  <View style={styles.suggestedGrid}>
+                    {(
+                      SUGGESTED_CATEGORIES[user?.businessType || ""] ||
+                      SUGGESTED_CATEGORIES.default
+                    ).map((suggestion, index) => {
+                      const IconComponent = getIconComponent(suggestion.icon);
+                      return (
+                        <TouchableOpacity
+                          key={index}
+                          style={[
+                            styles.suggestedItem,
+                            {
+                              backgroundColor: suggestion.color + "20",
+                              borderColor: suggestion.color,
+                            },
+                          ]}
+                          onPress={() => {
+                            setCategoryName(suggestion.name);
+                            setSelectedIcon(suggestion.icon);
+                            setSelectedColor(suggestion.color);
+                          }}
+                        >
+                          <View
+                            style={[
+                              styles.suggestedIcon,
+                              { backgroundColor: suggestion.color },
+                            ]}
+                          >
+                            <IconComponent size={16} color={COLORS.white} />
+                          </View>
+                          <Text
+                            style={[
+                              styles.suggestedText,
+                              { color: suggestion.color },
+                            ]}
+                          >
+                            {suggestion.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+
               {/* Category Name */}
               <Text style={styles.inputLabel}>Category Name</Text>
               <TextInput
@@ -559,7 +758,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    maxHeight: "85%",
+    maxHeight: "92%",
   },
   modalHeader: {
     flexDirection: "row",
@@ -580,29 +779,30 @@ const styles = StyleSheet.create({
   },
   modalBody: {
     padding: 20,
+    paddingBottom: 90,
   },
   inputLabel: {
     fontSize: 14,
     fontWeight: "600",
     color: COLORS.textDark,
     marginBottom: 8,
-    marginTop: 16,
+    marginTop: 10,
   },
   input: {
     backgroundColor: COLORS.lightBlueBg,
     borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
+    padding: 10,
+    fontSize: 14,
     color: COLORS.textDark,
   },
   iconGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 12,
+    gap: 10,
   },
   iconOption: {
-    width: 60,
-    height: 60,
+    width: 35,
+    height: 35,
     borderRadius: 12,
     backgroundColor: COLORS.lightBlueBg,
     alignItems: "center",
@@ -628,11 +828,11 @@ const styles = StyleSheet.create({
   colorGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 12,
+    gap: 4,
   },
   colorOption: {
-    width: 50,
-    height: 50,
+    width: 40,
+    height: 40,
     borderRadius: 25,
     alignItems: "center",
     justifyContent: "center",
@@ -648,8 +848,8 @@ const styles = StyleSheet.create({
   },
   modalActions: {
     flexDirection: "row",
-    padding: 20,
-    gap: 12,
+    padding: 10,
+    gap: 10,
     borderTopWidth: 1,
     borderTopColor: COLORS.borderLight,
   },
@@ -677,5 +877,31 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: COLORS.white,
+  },
+  suggestedGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 10,
+  },
+  suggestedItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  suggestedIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 6,
+  },
+  suggestedText: {
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

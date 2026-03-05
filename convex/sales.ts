@@ -93,12 +93,35 @@ export const createSale = mutation({
     ),
     paymentReceived: v.number(),
     clientTimestamp: v.optional(v.number()), // Device timestamp
+    saleDate: v.optional(v.string()), // Selected date in YYYY-MM-DD format
   },
   handler: async (ctx, args) => {
-    // Use client timestamp if provided, otherwise use server time
-    const timestamp = args.clientTimestamp || Date.now();
-    const now = new Date(timestamp);
-    const date = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    // Use saleDate if provided, otherwise derive from clientTimestamp or server time
+    let date: string;
+    let timestamp: number;
+    let now: Date;
+
+    if (args.saleDate) {
+      // When saleDate is provided, use that date for both date and createdAt
+      date = args.saleDate;
+      // Parse the saleDate and get timestamp for that date (use clientTimestamp or current time)
+      const clientTs = args.clientTimestamp || Date.now();
+      now = new Date(clientTs);
+      // Set the date to the selected date while keeping the time
+      now.setFullYear(parseInt(args.saleDate.split("-")[0]));
+      now.setMonth(parseInt(args.saleDate.split("-")[1]) - 1);
+      now.setDate(parseInt(args.saleDate.split("-")[2]));
+      timestamp = now.getTime();
+    } else {
+      timestamp = args.clientTimestamp || Date.now();
+      now = new Date(timestamp);
+      // Extract date components - the client timestamp is already in local time
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      date = `${year}-${month}-${day}`;
+    }
+
     const time = now.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
