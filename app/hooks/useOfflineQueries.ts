@@ -192,7 +192,10 @@ export function useAllTransactions(userId: string | undefined) {
     api.analytics.getCombinedTransactions,
     userId ? { userId: userId as UserId } : "skip",
   );
-  return useOfflineCached(live, userId ? `all_transactions_${userId}` : undefined);
+  return useOfflineCached(
+    live,
+    userId ? `all_transactions_${userId}` : undefined,
+  );
 }
 
 // Hook for paginated transactions (reactive – new sales/expenses appear immediately)
@@ -209,4 +212,13 @@ export function useTransactions(
     live,
     userId ? `transactions_${userId}_${limit}_${cursor ?? 0}` : undefined,
   );
+}
+
+// Hook for trash bin transactions (reactive)
+export function useTrashTransactions(userId: string | undefined) {
+  const live = useQuery(
+    api.analytics.getTrashTransactions,
+    userId ? { userId: userId as UserId } : "skip",
+  );
+  return useOfflineCached(live, userId ? `trash_${userId}` : undefined);
 }

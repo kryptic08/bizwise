@@ -168,3 +168,34 @@ export const createSale = mutation({
     return { saleId, transactionId };
   },
 });
+
+// Soft-delete sale (move to trash)
+export const softDeleteSale = mutation({
+  args: { id: v.id("sales") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { deletedAt: Date.now() });
+  },
+});
+
+// Restore sale from trash
+export const restoreSale = mutation({
+  args: { id: v.id("sales") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { deletedAt: undefined });
+  },
+});
+
+// Permanently delete sale and all its items
+export const permanentDeleteSale = mutation({
+  args: { id: v.id("sales") },
+  handler: async (ctx, args) => {
+    const items = await ctx.db
+      .query("saleItems")
+      .withIndex("by_sale", (q) => q.eq("saleId", args.id))
+      .collect();
+    for (const item of items) {
+      await ctx.db.delete(item._id);
+    }
+    await ctx.db.delete(args.id);
+  },
+});

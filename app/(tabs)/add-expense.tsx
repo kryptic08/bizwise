@@ -1167,27 +1167,29 @@ If no items found or image is unclear, return: []`;
 
               {/* Category Dropdown (locked for OCR items) */}
               <Text style={styles.inputLabel}>Category</Text>
-              <TouchableOpacity
-                style={[
-                  styles.dropdownInput,
-                  item.isOcrSource && styles.lockedInput,
-                ]}
-                onPress={() => !item.isOcrSource && openCategoryPicker(item.id)}
-                disabled={item.isOcrSource}
-              >
-                <Text
-                  style={[
-                    styles.dropdownText,
-                    !item.category && styles.placeholderText,
-                  ]}
+              {item.isOcrSource ? (
+                <View style={[styles.dropdownInput, styles.lockedInput]}>
+                  <Text style={styles.dropdownText}>
+                    {item.category || "Select Category"}
+                  </Text>
+                  <Lock size={16} color={COLORS.textGray} />
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.dropdownInput}
+                  onPress={() => openCategoryPicker(item.id)}
                 >
-                  {item.category || "Select Category"}
-                </Text>
-                {!item.isOcrSource && (
+                  <Text
+                    style={[
+                      styles.dropdownText,
+                      !item.category && styles.placeholderText,
+                    ]}
+                  >
+                    {item.category || "Select Category"}
+                  </Text>
                   <ChevronDown color={COLORS.textGray} size={20} />
-                )}
-                {item.isOcrSource && <Lock size={16} color={COLORS.textGray} />}
-              </TouchableOpacity>
+                </TouchableOpacity>
+              )}
 
               {/* Expense Title */}
               <View style={styles.labelRow}>

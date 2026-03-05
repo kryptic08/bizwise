@@ -63,6 +63,7 @@ export default defineSchema({
     date: v.string(),
     time: v.string(),
     createdAt: v.number(),
+    deletedAt: v.optional(v.number()), // Unix ms timestamp when moved to trash
   })
     .index("by_date", ["date"])
     .index("by_user", ["userId"])
@@ -91,6 +92,7 @@ export default defineSchema({
     receiptImage: v.optional(v.string()), // Legacy: local URI (kept for backward compatibility)
     ocrText: v.optional(v.string()),
     createdAt: v.number(),
+    deletedAt: v.optional(v.number()), // Unix ms timestamp when moved to trash
   })
     .index("by_date", ["date"])
     .index("by_user", ["userId"])

@@ -207,21 +207,33 @@ export const addExpenseGroup = mutation({
   },
 });
 
-// Delete expense
-export const deleteExpense = mutation({
+// Soft-delete expense (move to trash)
+export const softDeleteExpense = mutation({
   args: { id: v.id("expenses") },
   handler: async (ctx, args) => {
-    // Delete all expense items first
+    await ctx.db.patch(args.id, { deletedAt: Date.now() });
+  },
+});
+
+// Restore expense from trash
+export const restoreExpense = mutation({
+  args: { id: v.id("expenses") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { deletedAt: undefined });
+  },
+});
+
+// Permanently delete expense and all its items
+export const permanentDeleteExpense = mutation({
+  args: { id: v.id("expenses") },
+  handler: async (ctx, args) => {
     const items = await ctx.db
       .query("expenseItems")
       .withIndex("by_expense", (q) => q.eq("expenseId", args.id))
       .collect();
-
     for (const item of items) {
       await ctx.db.delete(item._id);
     }
-
-    // Then delete the expense
     await ctx.db.delete(args.id);
   },
 });

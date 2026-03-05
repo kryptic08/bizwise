@@ -13,9 +13,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#3b6ea5"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bizwise.expensemanager"
@@ -77,6 +75,14 @@
       "eas": {
         "projectId": "0d1772b9-4865-47cd-8832-81296905f5a8"
       }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0d1772b9-4865-47cd-8832-81296905f5a8",
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     },
     "owner": "chrlie"
   }

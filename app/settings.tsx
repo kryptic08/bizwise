@@ -2,7 +2,6 @@ import { useRouter } from "expo-router";
 import {
   ArrowLeft,
   Bell,
-  Briefcase,
   ChevronRight,
   Lock,
   Target,
@@ -38,13 +37,6 @@ export default function SettingsScreen() {
       icon: Target,
       color: COLORS.iconBlue,
       onPress: () => router.push("/target-income"),
-    },
-    {
-      id: 5,
-      title: "Business Type",
-      icon: Briefcase,
-      color: COLORS.iconBlue,
-      onPress: () => router.push("/change-business-type" as any),
     },
     {
       id: 2,

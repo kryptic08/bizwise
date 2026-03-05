@@ -2,6 +2,7 @@ import { HelpTooltip } from "@/components/HelpTooltip";
 import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
+import { useMutation } from "convex/react";
 import { useRouter } from "expo-router";
 import {
   ArrowDownRight,
@@ -11,12 +12,13 @@ import {
   ChevronDown,
   Coins,
   ShoppingBag,
+  Trash2,
   X,
 } from "lucide-react-native";
 import React, { useMemo, useState } from "react";
 import {
+  Alert,
   FlatList,
-  ActivityIndicator,
   Modal,
   Platform,
   StatusBar,
@@ -25,6 +27,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { api } from "../../convex/_generated/api";
+import { Id } from "../../convex/_generated/dataModel";
 import { OfflineIndicator } from "../components/OfflineIndicator";
 import { SyncBadge } from "../components/SyncBadge";
 import { useAuth } from "../context/AuthContext";
@@ -76,6 +80,37 @@ interface Transaction {
 export default function TransactionScreen() {
   const router = useRouter();
   const { user } = useAuth();
+
+  const softDeleteSale = useMutation(api.sales.softDeleteSale);
+  const softDeleteExpense = useMutation(api.expenses.softDeleteExpense);
+
+  const handleMoveToTrash = (item: Transaction) => {
+    Alert.alert(
+      "Move to Trash?",
+      `${item.transactionId} will be moved to trash and can be recovered within 30 days.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Move to Trash",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              if (item.type === "income") {
+                await softDeleteSale({ id: item.id as Id<"sales"> });
+              } else {
+                await softDeleteExpense({ id: item.id as Id<"expenses"> });
+              }
+            } catch {
+              Alert.alert(
+                "Error",
+                "Failed to delete transaction. Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
 
   // Date filter state - default to today
   const today = new Date();
@@ -172,7 +207,20 @@ export default function TransactionScreen() {
   }, [allTransactions, startDate, endDate]);
 
   const formatDateDisplay = (date: Date) => {
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
     return `${months[date.getMonth()]}/${date.getDate()}/${date.getFullYear()}`;
   };
 
@@ -245,13 +293,13 @@ export default function TransactionScreen() {
 
   const handleLoadMore = () => {
     if (hasMore) {
-      setCurrentPage(prev => prev + 1);
+      setCurrentPage((prev) => prev + 1);
     }
   };
 
   const handlePrevious = () => {
     if (currentPage > 1) {
-      setCurrentPage(prev => prev - 1);
+      setCurrentPage((prev) => prev - 1);
     }
   };
 
@@ -277,7 +325,7 @@ export default function TransactionScreen() {
   // Frontend pagination - slice the filtered transactions
   const paginatedTransactions = filteredTransactions.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
+    currentPage * ITEMS_PER_PAGE,
   );
 
   const renderItem = ({
@@ -393,6 +441,13 @@ export default function TransactionScreen() {
                 </Text>
               </View>
             ))}
+            <TouchableOpacity
+              style={styles.deleteRowBtn}
+              onPress={() => handleMoveToTrash(item)}
+            >
+              <Trash2 size={14} color="#ef4444" />
+              <Text style={styles.deleteRowBtnText}>Move to Trash</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -439,6 +494,12 @@ export default function TransactionScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Transaction</Text>
         <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => router.push("/trash" as any)}
+          >
+            <Trash2 color={COLORS.white} size={20} />
+          </TouchableOpacity>
           <SyncBadge compact />
           <TouchableOpacity style={styles.headerButton}>
             <HelpTooltip
@@ -528,33 +589,59 @@ export default function TransactionScreen() {
           ListFooterComponent={() => (
             <View style={styles.paginationFooter}>
               <TouchableOpacity
-                style={[styles.paginationButton, currentPage === 1 && styles.paginationButtonDisabled]}
+                style={[
+                  styles.paginationButton,
+                  currentPage === 1 && styles.paginationButtonDisabled,
+                ]}
                 onPress={handleFirstPage}
                 disabled={currentPage === 1}
               >
-                <Text style={[styles.paginationButtonText, currentPage === 1 && styles.paginationButtonTextDisabled]}>
+                <Text
+                  style={[
+                    styles.paginationButtonText,
+                    currentPage === 1 && styles.paginationButtonTextDisabled,
+                  ]}
+                >
                   First
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.paginationButton, currentPage === 1 && styles.paginationButtonDisabled]}
+                style={[
+                  styles.paginationButton,
+                  currentPage === 1 && styles.paginationButtonDisabled,
+                ]}
                 onPress={handlePrevious}
                 disabled={currentPage === 1}
               >
-                <Text style={[styles.paginationButtonText, currentPage === 1 && styles.paginationButtonTextDisabled]}>
+                <Text
+                  style={[
+                    styles.paginationButtonText,
+                    currentPage === 1 && styles.paginationButtonTextDisabled,
+                  ]}
+                >
                   Prev
                 </Text>
               </TouchableOpacity>
 
-              <Text style={styles.pageIndicator}>Page {currentPage} of {totalPages || 1}</Text>
+              <Text style={styles.pageIndicator}>
+                Page {currentPage} of {totalPages || 1}
+              </Text>
 
               <TouchableOpacity
-                style={[styles.paginationButton, !hasMore && styles.paginationButtonDisabled]}
+                style={[
+                  styles.paginationButton,
+                  !hasMore && styles.paginationButtonDisabled,
+                ]}
                 onPress={handleLoadMore}
                 disabled={!hasMore}
               >
-                <Text style={[styles.paginationButtonText, !hasMore && styles.paginationButtonTextDisabled]}>
+                <Text
+                  style={[
+                    styles.paginationButtonText,
+                    !hasMore && styles.paginationButtonTextDisabled,
+                  ]}
+                >
                   Next
                 </Text>
               </TouchableOpacity>
@@ -928,6 +1015,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: COLORS.textDark,
+  },
+  deleteRowBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 4,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: "#ef4444",
+    borderRadius: 8,
+  },
+  deleteRowBtnText: {
+    fontSize: 12,
+    color: "#ef4444",
+    fontWeight: "500",
   },
   colName: {
     flex: 2,

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 
 // Get financial summary (totals) for a user
 // Optimized to process sales and calculate totals in a single pass
@@ -260,17 +260,25 @@ export const getCombinedTransactions = query({
     let expenses;
 
     if (args.userId) {
-      sales = await ctx.db
-        .query("sales")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId))
-        .collect();
-      expenses = await ctx.db
-        .query("expenses")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId))
-        .collect();
+      sales = (
+        await ctx.db
+          .query("sales")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect()
+      ).filter((s) => !s.deletedAt);
+      expenses = (
+        await ctx.db
+          .query("expenses")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect()
+      ).filter((e) => !e.deletedAt);
     } else {
-      sales = await ctx.db.query("sales").collect();
-      expenses = await ctx.db.query("expenses").collect();
+      sales = (await ctx.db.query("sales").collect()).filter(
+        (s) => !s.deletedAt,
+      );
+      expenses = (await ctx.db.query("expenses").collect()).filter(
+        (e) => !e.deletedAt,
+      );
     }
 
     // Helper function to format time in Philippines timezone (UTC+8)
@@ -312,16 +320,45 @@ export const getCombinedTransactions = query({
     const getDateFromSale = (sale: { date?: string; createdAt: number }) => {
       if (sale.date) {
         const [year, month, day] = sale.date.split("-").map(Number);
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const months = [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
+        ];
         return `${months[month - 1]}/${day}/${year}`;
       }
       return formatDate(sale.createdAt);
     };
 
-    const getDateFromExpense = (expense: { date?: string; createdAt: number }) => {
+    const getDateFromExpense = (expense: {
+      date?: string;
+      createdAt: number;
+    }) => {
       if (expense.date) {
         const [year, month, day] = expense.date.split("-").map(Number);
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const months = [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
+        ];
         return `${months[month - 1]}/${day}/${year}`;
       }
       return formatDate(expense.createdAt);
@@ -439,13 +476,13 @@ export const getCombinedTransactionsPaginated = query({
 
     const expensesPage = await expensesQuery.take(limit + 1);
 
-    // Apply cursor filter in JavaScript (Convex filter is limited)
-    let filteredSales = salesPage;
-    let filteredExpenses = expensesPage;
-    
+    // Apply cursor filter and exclude trashed records
+    let filteredSales = salesPage.filter((s) => !s.deletedAt);
+    let filteredExpenses = expensesPage.filter((e) => !e.deletedAt);
+
     if (cursor) {
-      filteredSales = salesPage.filter(s => s.createdAt < cursor);
-      filteredExpenses = expensesPage.filter(e => e.createdAt < cursor);
+      filteredSales = filteredSales.filter((s) => s.createdAt < cursor);
+      filteredExpenses = filteredExpenses.filter((e) => e.createdAt < cursor);
     }
 
     // Check if there are more results (compare original pages before filtering)
@@ -474,8 +511,18 @@ export const getCombinedTransactionsPaginated = query({
         // date is in YYYY-MM-DD format, convert to "Feb/25/2026" format
         const [year, month, day] = sale.date.split("-").map(Number);
         const months = [
-          "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
         ];
         return `${months[month - 1]}/${day}/${year}`;
       }
@@ -483,19 +530,42 @@ export const getCombinedTransactionsPaginated = query({
       const phTimestamp = sale.createdAt + 8 * 60 * 60 * 1000;
       const date = new Date(phTimestamp);
       const months = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
       ];
       return `${months[date.getUTCMonth()]}/${date.getUTCDate()}/${date.getUTCFullYear()}`;
     };
 
-    const formatDateFromExpense = (expense: { date?: string; createdAt: number }) => {
+    const formatDateFromExpense = (expense: {
+      date?: string;
+      createdAt: number;
+    }) => {
       if (expense.date) {
         // date is in YYYY-MM-DD format, convert to "Feb/25/2026" format
         const [year, month, day] = expense.date.split("-").map(Number);
         const months = [
-          "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
         ];
         return `${months[month - 1]}/${day}/${year}`;
       }
@@ -503,8 +573,18 @@ export const getCombinedTransactionsPaginated = query({
       const phTimestamp = expense.createdAt + 8 * 60 * 60 * 1000;
       const date = new Date(phTimestamp);
       const months = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
       ];
       return `${months[date.getUTCMonth()]}/${date.getUTCDate()}/${date.getUTCFullYear()}`;
     };
@@ -1161,6 +1241,184 @@ export const getMonthlyReportData = query({
       expenses: expensesWithItems,
       salesGrandTotal: salesRaw.reduce((s, r) => s + r.totalAmount, 0),
       expensesGrandTotal: expensesRaw.reduce((s, r) => s + r.totalAmount, 0),
+    };
+  },
+});
+
+//  Trash Bin
+
+const TRASH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+
+// Get all trashed transactions for a user (sorted by most recently trashed first)
+export const getTrashTransactions = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+
+    const trashedSales = (
+      await ctx.db
+        .query("sales")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect()
+    ).filter((s) => !!s.deletedAt);
+
+    const trashedExpenses = (
+      await ctx.db
+        .query("expenses")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect()
+    ).filter((e) => !!e.deletedAt);
+
+    const formatDate = (ts: number) => {
+      const phTs = ts + 8 * 60 * 60 * 1000;
+      const d = new Date(phTs);
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      return `${months[d.getUTCMonth()]}/${d.getUTCDate()}/${d.getUTCFullYear()}`;
+    };
+
+    const result: {
+      id: string;
+      transactionId: string;
+      type: "income" | "expense";
+      amount: string;
+      date: string;
+      deletedAt: number;
+      trashedDate: string;
+      daysRemaining: number;
+    }[] = [];
+
+    for (const s of trashedSales) {
+      const daysRemaining = Math.max(
+        0,
+        Math.ceil((s.deletedAt! + TRASH_TTL_MS - now) / (1000 * 60 * 60 * 24)),
+      );
+      result.push({
+        id: s._id,
+        transactionId: s.transactionId,
+        type: "income",
+        amount: `${s.totalAmount.toFixed(2)}`,
+        date: s.date
+          ? (() => {
+              const [y, m, d] = s.date.split("-").map(Number);
+              const mo = [
+                "Jan",
+                "Feb",
+                "Mar",
+                "Apr",
+                "May",
+                "Jun",
+                "Jul",
+                "Aug",
+                "Sep",
+                "Oct",
+                "Nov",
+                "Dec",
+              ];
+              return `${mo[m - 1]}/${d}/${y}`;
+            })()
+          : formatDate(s.createdAt),
+        deletedAt: s.deletedAt!,
+        trashedDate: formatDate(s.deletedAt!),
+        daysRemaining,
+      });
+    }
+
+    for (const e of trashedExpenses) {
+      const daysRemaining = Math.max(
+        0,
+        Math.ceil((e.deletedAt! + TRASH_TTL_MS - now) / (1000 * 60 * 60 * 24)),
+      );
+      result.push({
+        id: e._id,
+        transactionId: e.transactionId,
+        type: "expense",
+        amount: `${e.totalAmount.toFixed(2)}`,
+        date: e.date
+          ? (() => {
+              const [y, m, d] = e.date.split("-").map(Number);
+              const mo = [
+                "Jan",
+                "Feb",
+                "Mar",
+                "Apr",
+                "May",
+                "Jun",
+                "Jul",
+                "Aug",
+                "Sep",
+                "Oct",
+                "Nov",
+                "Dec",
+              ];
+              return `${mo[m - 1]}/${d}/${y}`;
+            })()
+          : formatDate(e.createdAt),
+        deletedAt: e.deletedAt!,
+        trashedDate: formatDate(e.deletedAt!),
+        daysRemaining,
+      });
+    }
+
+    // Sort by most recently trashed first
+    result.sort((a, b) => b.deletedAt - a.deletedAt);
+    return result;
+  },
+});
+
+// Permanently delete all expired trash records (older than 30 days)
+export const purgeExpiredTrash = mutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - TRASH_TTL_MS;
+
+    const expiredSales = (
+      await ctx.db
+        .query("sales")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect()
+    ).filter((s) => !!s.deletedAt && s.deletedAt < cutoff);
+
+    const expiredExpenses = (
+      await ctx.db
+        .query("expenses")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect()
+    ).filter((e) => !!e.deletedAt && e.deletedAt < cutoff);
+
+    for (const s of expiredSales) {
+      const items = await ctx.db
+        .query("saleItems")
+        .withIndex("by_sale", (q) => q.eq("saleId", s._id))
+        .collect();
+      for (const item of items) await ctx.db.delete(item._id);
+      await ctx.db.delete(s._id);
+    }
+
+    for (const e of expiredExpenses) {
+      const items = await ctx.db
+        .query("expenseItems")
+        .withIndex("by_expense", (q) => q.eq("expenseId", e._id))
+        .collect();
+      for (const item of items) await ctx.db.delete(item._id);
+      await ctx.db.delete(e._id);
+    }
+
+    return {
+      purgedSales: expiredSales.length,
+      purgedExpenses: expiredExpenses.length,
     };
   },
 });
