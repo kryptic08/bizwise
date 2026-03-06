@@ -1,22 +1,25 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { Id } from "../../convex/_generated/dataModel";
 
-export type BusinessType = 
+export type BusinessType =
   | "Food Business"
-  | "Printing Services"
-  | "Construction"
-  | "Retail"
-  | "Meat Shop"
-  | "Others";
+  | "Printing Business"
+  | "Laundry Shop"
+  | "Sari-sari Store";
 
 export const BUSINESS_TYPES: BusinessType[] = [
   "Food Business",
-  "Printing Services",
-  "Construction",
-  "Retail",
-  "Meat Shop",
-  "Others",
+  "Printing Business",
+  "Laundry Shop",
+  "Sari-sari Store",
 ];
 
 interface User {
@@ -133,14 +136,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       lockWithPin,
       refreshUser,
     }),
-    [user, isLoading, isPinLocked, login, logout, unlockWithPin, lockWithPin, refreshUser]
+    [
+      user,
+      isLoading,
+      isPinLocked,
+      login,
+      logout,
+      unlockWithPin,
+      lockWithPin,
+      refreshUser,
+    ],
   );
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

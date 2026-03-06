@@ -40,12 +40,57 @@ export function getCategoriesForBusinessType(
         "Marketing & Advertising",
         "Employee Wages",
         "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
         "General",
       ];
 
+    case "Printing Business":
+    case "Printing Services": // legacy alias
+      return [
+        "Raw Materials",
+        "Equipment",
+        "Store Supplies",
+        "Packaging Materials",
+        "Utilities",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "General",
+      ];
+
+    case "Laundry Shop":
+      return [
+        "Detergents & Chemicals",
+        "Store Supplies",
+        "Utilities",
+        "Equipment",
+        "Packaging Materials",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "General",
+      ];
+
+    case "Sari-sari Store":
+    case "Sari-Sari Store": // legacy alias
+      return [
+        "Merchandise Inventory",
+        "Store Supplies",
+        "Packaging Materials",
+        "Utilities",
+        "Equipment",
+        "Transportation",
+        "Rent",
+        "Marketing & Advertising",
+        "Employee Wages",
+        "Maintenance & Repairs",
+        "General",
+      ];
+
+    // Legacy types — kept so old accounts still categorize correctly
     case "Meat Shop":
       return [
         "Merchandise Inventory",
@@ -58,28 +103,7 @@ export function getCategoriesForBusinessType(
         "Marketing & Advertising",
         "Employee Wages",
         "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
         "Ice & Cold Storage",
-        "General",
-      ];
-
-    case "Printing Services":
-      return [
-        "Raw Materials",
-        "Equipment",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
         "General",
       ];
 
@@ -93,9 +117,6 @@ export function getCategoriesForBusinessType(
         "Utilities",
         "Rent",
         "Marketing & Advertising",
-        "Permits & Certifications",
-        "Insurance",
-        "Bank Charges",
         "Tools & Hardware",
         "Safety Equipment",
         "General",
@@ -113,251 +134,7 @@ export function getCategoriesForBusinessType(
         "Marketing & Advertising",
         "Employee Wages",
         "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
         "Security Services",
-        "General",
-      ];
-
-    case "Water Station":
-      return [
-        "Water Supplies",
-        "Gallon/Container Inventory",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Store Supplies",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Laundry Shop":
-      return [
-        "Detergents & Chemicals",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Packaging Materials",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Internet Cafe":
-      return [
-        "Internet Services",
-        "Computer Equipment",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Packaging Materials",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Software Subscriptions",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Beauty Salon":
-      return [
-        "Hair & Beauty Products",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Packaging Materials",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Repair Shop":
-      return [
-        "Parts & Components",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Tools",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Pharmacy":
-      return [
-        "Medicines & Drugs",
-        "Medical Supplies",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Packaging Materials",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Convenience Store":
-      return [
-        "Merchandise Inventory",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "Security Services",
-        "General",
-      ];
-
-    case "Hardware":
-      return [
-        "Hardware Inventory",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Computer Shop":
-      return [
-        "Computer Parts",
-        "Accessories",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Packaging Materials",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Software Subscriptions",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Mobile Shop":
-      return [
-        "Phone & Gadgets",
-        "Accessories",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Packaging Materials",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Bakery":
-      return [
-        "Raw Materials",
-        "Packaging Materials",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Coffee Shop":
-      return [
-        "Raw Materials",
-        "Packaging Materials",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
-        "General",
-      ];
-
-    case "Sari-Sari Store":
-      return [
-        "Merchandise Inventory",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
         "General",
       ];
 
@@ -374,9 +151,6 @@ export function getCategoriesForBusinessType(
         "Marketing & Advertising",
         "Employee Wages",
         "Maintenance & Repairs",
-        "Licenses & Permits",
-        "Insurance",
-        "Bank Charges",
         "General",
       ];
   }

@@ -27,18 +27,16 @@ const COLORS = {
 
 const BUSINESS_DESCRIPTIONS: Record<BusinessType, string> = {
   "Food Business": "Restaurants, catering, food stalls, bakeries",
-  "Printing Services": "Print shops, tarpaulin, document printing",
-  Construction: "Building, renovation, carpentry, contracting",
-  Retail: "Sari-sari store, boutique, general merchandise",
-  "Meat Shop": "Meat, poultry, seafood retail",
-  Others: "Any other type of business",
+  "Printing Business": "Print shops, tarpaulin, document printing",
+  "Laundry Shop": "Laundry services, dry cleaning, fabric care",
+  "Sari-sari Store": "Small variety stores, convenience goods",
 };
 
 export default function ChangeBusinessTypeScreen() {
   const router = useRouter();
   const { user, login } = useAuth();
   const [selected, setSelected] = useState<BusinessType>(
-    (user?.businessType as BusinessType) ?? "Others",
+    (user?.businessType as BusinessType) ?? "Food Business",
   );
   const [isSaving, setIsSaving] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -190,8 +188,9 @@ export default function ChangeBusinessTypeScreen() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Change Business Type?</Text>
             <Text style={styles.modalText}>
-              Changing your business type to "{selected}" will remove your current product categories. 
-              New default categories will be created based on your new business type.
+              Changing your business type to "{selected}" will remove your
+              current product categories. New default categories will be created
+              based on your new business type.
             </Text>
             <Text style={styles.modalWarning}>
               This action cannot be undone.

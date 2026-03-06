@@ -98,99 +98,21 @@ const SUGGESTED_CATEGORIES: Record<
     { name: "Meals", icon: "Utensils", color: "#FF6B6B" },
     { name: "Desserts", icon: "IceCream", color: "#FD79A8" },
   ],
-  "Meat Shop": [
-    { name: "Chicken", icon: "Package", color: "#FF6B6B" },
-    { name: "Pork", icon: "Box", color: "#F38181" },
-    { name: "Beef", icon: "Truck", color: "#AA96DA" },
-    { name: "Seafood", icon: "Truck", color: "#4ECDC4" },
-  ],
-  Retail: [
-    { name: "Essentials", icon: "ShoppingBag", color: "#FF6B6B" },
-    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Beverages", icon: "Coffee", color: "#6C5CE7" },
-    { name: "Household", icon: "Home", color: "#4ECDC4" },
-  ],
-  "Convenience Store": [
-    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
-    { name: "Daily Needs", icon: "ShoppingBag", color: "#FF6B6B" },
-    { name: "Household", icon: "Home", color: "#4ECDC4" },
-  ],
-  "Sari-Sari Store": [
-    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
-    { name: "Sundries", icon: "ShoppingBag", color: "#FF6B6B" },
-    { name: "Canned Goods", icon: "Box", color: "#95E1D3" },
-  ],
-  Bakery: [
-    { name: "Bread", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Pastries", icon: "IceCream", color: "#FD79A8" },
-    { name: "Cakes", icon: "Sparkles", color: "#AA96DA" },
-    { name: "Beverages", icon: "Coffee", color: "#6C5CE7" },
-  ],
-  "Coffee Shop": [
-    { name: "Coffee", icon: "Coffee", color: "#6C5CE7" },
-    { name: "Tea", icon: "Utensils", color: "#4ECDC4" },
-    { name: "Pastries", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Snacks", icon: "Box", color: "#FF6B6B" },
-  ],
-  "Water Station": [
-    { name: "Refill", icon: "RefreshCw", color: "#4ECDC4" },
-    { name: "Gallons", icon: "Box", color: "#95E1D3" },
-    { name: "Supplies", icon: "Package", color: "#FF6B6B" },
+  "Printing Business": [
+    { name: "Printing", icon: "Printer", color: "#FF6B6B" },
+    { name: "Supplies", icon: "Box", color: "#FDCB6E" },
+    { name: "Services", icon: "Briefcase", color: "#6C5CE7" },
   ],
   "Laundry Shop": [
     { name: "Wash", icon: "RefreshCw", color: "#4ECDC4" },
     { name: "Dry Clean", icon: "Sparkles", color: "#AA96DA" },
     { name: "Supplies", icon: "Package", color: "#FF6B6B" },
   ],
-  "Internet Cafe": [
-    { name: "Computer", icon: "Computer", color: "#6C5CE7" },
-    { name: "Printing", icon: "Printer", color: "#FF6B6B" },
-    { name: "Wifi", icon: "Phone", color: "#4ECDC4" },
-  ],
-  "Beauty Salon": [
-    { name: "Hair Care", icon: "Scissors", color: "#FF6B6B" },
-    { name: "Skin Care", icon: "Heart", color: "#FD79A8" },
-    { name: "Nails", icon: "Sparkles", color: "#AA96DA" },
-    { name: "Products", icon: "Package", color: "#FDCB6E" },
-  ],
-  "Repair Shop": [
-    { name: "Parts", icon: "Box", color: "#FF6B6B" },
-    { name: "Tools", icon: "Hammer", color: "#4ECDC4" },
-    { name: "Services", icon: "Wrench", color: "#6C5CE7" },
-  ],
-  Pharmacy: [
-    { name: "Medicines", icon: "Package", color: "#FF6B6B" },
-    { name: "Supplies", icon: "Box", color: "#4ECDC4" },
-    { name: "Wellness", icon: "Heart", color: "#FD79A8" },
-  ],
-  Hardware: [
-    { name: "Materials", icon: "Hammer", color: "#FF6B6B" },
-    { name: "Tools", icon: "Wrench", color: "#4ECDC4" },
-    { name: "Paints", icon: "Palette", color: "#FDCB6E" },
-    { name: "Electrical", icon: "Phone", color: "#6C5CE7" },
-  ],
-  "Computer Shop": [
-    { name: "Parts", icon: "Computer", color: "#6C5CE7" },
-    { name: "Accessories", icon: "Smartphone", color: "#4ECDC4" },
-    { name: "Services", icon: "Wrench", color: "#FF6B6B" },
-  ],
-  "Mobile Shop": [
-    { name: "Phones", icon: "Smartphone", color: "#6C5CE7" },
-    { name: "Accessories", icon: "Package", color: "#4ECDC4" },
-    { name: "Repairs", icon: "Wrench", color: "#FF6B6B" },
-  ],
-  "Printing Services": [
-    { name: "Printing", icon: "Printer", color: "#FF6B6B" },
-    { name: "Supplies", icon: "Box", color: "#FDCB6E" },
-    { name: "Services", icon: "Briefcase", color: "#6C5CE7" },
-  ],
-  Construction: [
-    { name: "Materials", icon: "Hammer", color: "#FF6B6B" },
-    { name: "Tools", icon: "Wrench", color: "#4ECDC4" },
-    { name: "Electrical", icon: "Phone", color: "#6C5CE7" },
-    { name: "Plumbing", icon: "Truck", color: "#95E1D3" },
+  "Sari-sari Store": [
+    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
+    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
+    { name: "Sundries", icon: "ShoppingBag", color: "#FF6B6B" },
+    { name: "Canned Goods", icon: "Box", color: "#95E1D3" },
   ],
   default: [
     { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
@@ -369,7 +291,8 @@ export default function ManageCategoriesScreen() {
     try {
       await deleteCategory({
         categoryId: categoryId as Id<"categories">,
-        moveProductsToCategoryId: moveToId as Id<"categories"> | undefined,
+        moveProductsToCategoryId:
+          moveToId != null ? (moveToId as Id<"categories">) : undefined,
       });
       Alert.alert("Success", "Category deleted successfully");
     } catch (error) {

@@ -12,7 +12,6 @@ import {
   ArrowLeft,
   Calendar,
   Camera,
-  ChevronDown,
   Lock,
   Plus,
   Trash2,
@@ -1416,48 +1415,42 @@ If no items found or image is unclear, return: []`;
                 </TouchableOpacity>
               )}
 
-              {/* Category Dropdown (locked for OCR items) */}
+              {/* Category Dropdown (always locked — set by AI auto-categorization) */}
               <Text style={styles.inputLabel}>Category</Text>
-              {item.isOcrSource ? (
-                <View style={[styles.dropdownInput, styles.lockedInput]}>
-                  <Text style={styles.dropdownText}>
-                    {item.category || "Select Category"}
-                  </Text>
-                  <Lock size={16} color={COLORS.textGray} />
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.dropdownInput}
-                  onPress={() => openCategoryPicker(item.id)}
+              <View style={[styles.dropdownInput, styles.lockedInput]}>
+                <Text
+                  style={[
+                    styles.dropdownText,
+                    !item.category && styles.placeholderText,
+                  ]}
                 >
-                  <Text
-                    style={[
-                      styles.dropdownText,
-                      !item.category && styles.placeholderText,
-                    ]}
-                  >
-                    {categorizingIds.has(item.id)
-                      ? "Categorizing..."
-                      : item.category || "Select Category"}
-                  </Text>
-                  <ChevronDown color={COLORS.textGray} size={20} />
-                </TouchableOpacity>
-              )}
+                  {categorizingIds.has(item.id)
+                    ? "Categorizing..."
+                    : item.category || "Auto-categorizing..."}
+                </Text>
+                <Lock size={16} color={COLORS.textGray} />
+              </View>
 
               {/* Expense Title */}
               <View style={styles.labelRow}>
                 <Text style={styles.inputLabel}>Expense Title</Text>
-                {!item.isOcrSource && item.category ? (
-                  <Text style={styles.autoCategoryHint}>
-                    Auto-categorized ↓
-                  </Text>
-                ) : null}
+                {item.isOcrSource && (
+                  <Lock
+                    size={12}
+                    color={COLORS.textGray}
+                    style={{ marginLeft: 4 }}
+                  />
+                )}
               </View>
               <TextInput
-                style={styles.textInput}
+                style={[
+                  styles.textInput,
+                  item.isOcrSource && styles.lockedInput,
+                ]}
                 placeholder="Enter expense title"
                 placeholderTextColor={COLORS.textGray}
                 value={item.title}
+                editable={!item.isOcrSource}
                 onChangeText={(value) =>
                   updateExpenseItem(item.id, "title", value)
                 }

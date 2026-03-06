@@ -120,6 +120,7 @@ export default function TransactionScreen() {
 
   const [startDate, setStartDate] = useState<Date>(today); // Default to today
   const [endDate, setEndDate] = useState<Date>(tomorrow);
+  const [isAllTime, setIsAllTime] = useState(false);
   const [showDateFilter, setShowDateFilter] = useState(false);
   // Which date is currently being picked: null = none, "start" = from, "end" = to
   const [activePicker, setActivePicker] = useState<"start" | "end" | null>(
@@ -235,29 +236,53 @@ export default function TransactionScreen() {
       case "today":
         setStartDate(now);
         setEndDate(tomorrow);
+        setIsAllTime(false);
         break;
       case "yesterday":
         const yesterday = new Date(now);
         yesterday.setDate(yesterday.getDate() - 1);
         setStartDate(yesterday);
         setEndDate(now);
+        setIsAllTime(false);
         break;
       case "week":
         const weekStart = new Date(now);
         weekStart.setDate(weekStart.getDate() - 7);
         setStartDate(weekStart);
         setEndDate(tomorrow);
+        setIsAllTime(false);
         break;
       case "month":
         const monthStart = new Date(now);
         monthStart.setDate(1);
         setStartDate(monthStart);
         setEndDate(tomorrow);
+        setIsAllTime(false);
         break;
       case "all":
-        // Set to a very early date and far future date
-        setStartDate(new Date(2020, 0, 1));
-        setEndDate(new Date(2100, 11, 31));
+        // Use actual data range: oldest → newest transaction date
+        {
+          const dates = allTransactions
+            .map((t) => parseTransactionDate(t.date))
+            .filter((d): d is Date => d !== null);
+          if (dates.length > 0) {
+            const minDate = new Date(
+              Math.min(...dates.map((d) => d.getTime())),
+            );
+            minDate.setHours(0, 0, 0, 0);
+            const maxDate = new Date(
+              Math.max(...dates.map((d) => d.getTime())),
+            );
+            maxDate.setHours(0, 0, 0, 0);
+            maxDate.setDate(maxDate.getDate() + 1); // endDate is exclusive
+            setStartDate(minDate);
+            setEndDate(maxDate);
+          } else {
+            setStartDate(new Date(2020, 0, 1));
+            setEndDate(new Date(today.getTime() + 86400000));
+          }
+          setIsAllTime(true);
+        }
         break;
     }
     setActivePicker(null);
@@ -520,8 +545,9 @@ export default function TransactionScreen() {
           >
             <Calendar size={16} color={COLORS.primaryBlue} />
             <Text style={styles.dateFilterText}>
-              {formatDateDisplay(startDate)} -{" "}
-              {formatDateDisplay(new Date(endDate.getTime() - 1))}
+              {isAllTime
+                ? "All Time"
+                : `${formatDateDisplay(startDate)} - ${formatDateDisplay(new Date(endDate.getTime() - 1))}`}
             </Text>
           </TouchableOpacity>
         </View>
@@ -782,7 +808,10 @@ export default function TransactionScreen() {
                 display="spinner"
                 maximumDate={new Date(endDate.getTime() - 86400000)}
                 onChange={(_: DateTimePickerEvent, date?: Date) => {
-                  if (date) setStartDate(date);
+                  if (date) {
+                    setStartDate(date);
+                    setIsAllTime(false);
+                  }
                 }}
                 style={{ alignSelf: "center" }}
               />
@@ -799,6 +828,7 @@ export default function TransactionScreen() {
                     next.setDate(next.getDate() + 1);
                     next.setHours(0, 0, 0, 0);
                     setEndDate(next);
+                    setIsAllTime(false);
                   }
                 }}
                 style={{ alignSelf: "center" }}
@@ -828,7 +858,10 @@ export default function TransactionScreen() {
           onChange={(event: DateTimePickerEvent, date?: Date) => {
             setActivePicker(null);
             setShowDateFilter(true);
-            if (event.type === "set" && date) setStartDate(date);
+            if (event.type === "set" && date) {
+              setStartDate(date);
+              setIsAllTime(false);
+            }
           }}
         />
       )}
@@ -846,6 +879,7 @@ export default function TransactionScreen() {
               next.setDate(next.getDate() + 1);
               next.setHours(0, 0, 0, 0);
               setEndDate(next);
+              setIsAllTime(false);
             }
           }}
         />
