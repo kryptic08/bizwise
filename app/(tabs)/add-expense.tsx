@@ -60,6 +60,14 @@ const GEMINI_API_KEYS = [
 ];
 let geminiApiKeyIndex = 0; // Round-robin counter for API keys
 
+// Dedicated API keys for AI auto-categorization — isolated from the OCR quota
+const GEMINI_CATEGORY_KEYS = [
+  process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_1!,
+  process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_2!,
+  process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_3!,
+];
+let geminiCategoryKeyIndex = 0; // Round-robin counter for category keys
+
 const GOOGLE_AI_MODELS = [
   "gemini-3-pro-preview",
   "gemini-2.5-pro",
@@ -72,9 +80,21 @@ const GOOGLE_AI_MODELS = [
 // Round-robin counter — persists across scans within session
 let googleModelIndex = 0;
 
+// ── AI auto-categorization settings ────────────────────────────────────────
+/** ms to wait after the user stops typing before calling the AI */
+const AI_DEBOUNCE_MS = 1500;
+/** minimum ms between successive AI category calls (rate-limit guard) */
+const AI_RATE_LIMIT_MS = 3000;
+/** minimum title length before consulting AI */
+const AI_MIN_TITLE_LENGTH = 4;
+/** cheapest model — used ONLY for single-item classification (~10 tokens out) */
+const AI_CATEGORY_MODEL = "gemini-flash-lite-latest";
+
 interface ExpenseItem {
   id: string;
   category: string;
+  /** Tracks who set the category: local keyword engine, AI, or user. */
+  categorySource?: "local" | "ai" | "user";
   title: string;
   amount: string;
   quantity: string;
@@ -121,6 +141,20 @@ export default function AddExpenseScreen() {
 
   const lottieRef = useRef<LottieView>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // ── AI category refs (no re-renders on mutation) ──────────────────────────
+  /** In-memory cache: "businessType::title" → category. Avoids duplicate AI calls. */
+  const aiCategoryCache = useRef<Map<string, string>>(new Map());
+  /** Per-item debounce timers keyed by expense item id. */
+  const categorizationTimers = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
+  /** Timestamp of the last AI category call (rate-limiting). */
+  const lastAICallTimestamp = useRef<number>(0);
+  /** Item IDs currently waiting for an AI category response. */
+  const [categorizingIds, setCategorizingIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   const EXPENSE_CACHE_KEY = "bizwise_expense_cache";
 
@@ -218,6 +252,15 @@ export default function AddExpenseScreen() {
 
   const removeExpenseItem = (id: string) => {
     if (expenses.length > 1) {
+      // Cancel any pending AI categorization timer for the removed item
+      const existing = categorizationTimers.current.get(id);
+      if (existing) clearTimeout(existing);
+      categorizationTimers.current.delete(id);
+      setCategorizingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setExpenses(expenses.filter((item) => item.id !== id));
     }
   };
@@ -230,7 +273,14 @@ export default function AddExpenseScreen() {
 
   const selectCategory = (category: string) => {
     if (selectedItemId) {
-      updateExpenseItem(selectedItemId, "category", category);
+      // Mark as user-chosen so AI never overrides it
+      setExpenses((prev) =>
+        prev.map((item) =>
+          item.id === selectedItemId
+            ? { ...item, category, categorySource: "user" as const }
+            : item,
+        ),
+      );
     }
     setShowCategoryPicker(false);
     setSelectedItemId(null);
@@ -239,11 +289,156 @@ export default function AddExpenseScreen() {
 
   const selectCustomCategory = () => {
     if (customCategory.trim() && selectedItemId) {
-      updateExpenseItem(selectedItemId, "category", customCategory.trim());
+      const cat = customCategory.trim();
+      setExpenses((prev) =>
+        prev.map((item) =>
+          item.id === selectedItemId
+            ? { ...item, category: cat, categorySource: "user" as const }
+            : item,
+        ),
+      );
       setShowCategoryPicker(false);
       setSelectedItemId(null);
       setCustomCategory("");
     }
+  };
+
+  // ── AI-powered category fallback ────────────────────────────────────────────
+  /**
+   * Calls Gemini with a minimal prompt (~100 tokens in / ~10 tokens out) to
+   * classify a single expense title. Only fires when the local keyword engine
+   * returned "General". Results are cached in-memory so the same title never
+   * triggers a second network call within a session.
+   */
+  const fetchAICategoryForItem = async (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (trimmed.length < AI_MIN_TITLE_LENGTH) return;
+
+    const businessType = user?.businessType;
+    const cacheKey = `${businessType ?? "general"}::${trimmed.toLowerCase()}`;
+
+    // 1. Serve from in-memory cache (free, instant)
+    if (aiCategoryCache.current.has(cacheKey)) {
+      const cached = aiCategoryCache.current.get(cacheKey)!;
+      setExpenses((prev) =>
+        prev.map((item) =>
+          item.id === id && item.categorySource !== "user"
+            ? { ...item, category: cached, categorySource: "ai" }
+            : item,
+        ),
+      );
+      setCategorizingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
+
+    // 2. Rate-limit: if a call fired too recently, reschedule and wait
+    const now = Date.now();
+    const elapsed = now - lastAICallTimestamp.current;
+    if (elapsed < AI_RATE_LIMIT_MS) {
+      const retry = AI_RATE_LIMIT_MS - elapsed;
+      const timer = setTimeout(() => fetchAICategoryForItem(id, title), retry);
+      categorizationTimers.current.set(id, timer);
+      return;
+    }
+
+    // 3. Mark item as loading and fire the call
+    setCategorizingIds((prev) => new Set(prev).add(id));
+    lastAICallTimestamp.current = Date.now();
+
+    try {
+      const categories = getCategoriesForBusinessType(businessType);
+      const btLabel = businessType
+        ? `for a ${businessType} business in the Philippines`
+        : "for a small business in the Philippines";
+
+      const prompt =
+        `You are an expense categorizer ${btLabel}.\n` +
+        `For the expense item "${trimmed}", choose the single best-fitting category:\n` +
+        `${categories.join(", ")}\n\n` +
+        `Reply with ONLY the exact category name from the list. No explanations.`;
+
+      const apiKey =
+        GEMINI_CATEGORY_KEYS[
+          geminiCategoryKeyIndex % GEMINI_CATEGORY_KEYS.length
+        ];
+      geminiCategoryKeyIndex =
+        (geminiCategoryKeyIndex + 1) % GEMINI_CATEGORY_KEYS.length;
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${AI_CATEGORY_MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: 15, temperature: 0 },
+          }),
+        },
+      );
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+      const raw: string =
+        data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+
+      // Validate: response must exactly match one of the allowed categories
+      const matched = categories.find(
+        (c) => c.toLowerCase() === raw.toLowerCase(),
+      );
+
+      if (matched && matched !== "General") {
+        aiCategoryCache.current.set(cacheKey, matched);
+        setExpenses((prev) =>
+          prev.map((item) =>
+            item.id === id && item.categorySource !== "user"
+              ? { ...item, category: matched, categorySource: "ai" }
+              : item,
+          ),
+        );
+      }
+    } catch (err) {
+      console.warn("[AI Category] fetch error:", err);
+    } finally {
+      setCategorizingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  /**
+   * Schedules an AI category call for `id` after AI_DEBOUNCE_MS of inactivity.
+   * Shows "Categorizing..." immediately so the user gets instant feedback.
+   * Cancels any previously scheduled call for the same item (standard debounce).
+   */
+  const triggerAICategoryDebounced = (id: string, title: string) => {
+    const existing = categorizationTimers.current.get(id);
+    if (existing) clearTimeout(existing);
+
+    if (title.trim().length < AI_MIN_TITLE_LENGTH) {
+      // Title is too short — make sure the loading indicator is cleared
+      setCategorizingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
+
+    // Show "Categorizing..." straight away (debounce + API latency = long wait)
+    setCategorizingIds((prev) => new Set(prev).add(id));
+
+    const timer = setTimeout(() => {
+      categorizationTimers.current.delete(id);
+      fetchAICategoryForItem(id, title);
+    }, AI_DEBOUNCE_MS);
+
+    categorizationTimers.current.set(id, timer);
   };
 
   const updateExpenseItem = (
@@ -251,8 +446,46 @@ export default function AddExpenseScreen() {
     field: keyof ExpenseItem,
     value: string,
   ) => {
-    setExpenses(
-      expenses.map((item) => {
+    // ── Pre-compute the AI-trigger decision from the current state snapshot ──
+    // This must run synchronously before setExpenses so we can act on the
+    // result afterwards without relying on side effects inside the mapper.
+    let shouldTriggerAI = false;
+
+    if (field === "title") {
+      const trimmed = value.trim();
+      const currentItem = expenses.find((item) => item.id === id);
+
+      if (currentItem && !currentItem.isOcrSource) {
+        if (
+          trimmed.length >= AI_MIN_TITLE_LENGTH &&
+          currentItem.categorySource !== "user"
+        ) {
+          const localCategory = categorizeItemForBusiness(
+            trimmed,
+            user?.businessType,
+          );
+          shouldTriggerAI = localCategory === "General";
+        }
+
+        // If AI won't fire, cancel any pending timer and clear the spinner
+        if (!shouldTriggerAI) {
+          const existing = categorizationTimers.current.get(id);
+          if (existing) {
+            clearTimeout(existing);
+            categorizationTimers.current.delete(id);
+          }
+          setCategorizingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        }
+      }
+    }
+
+    // ── Apply the state update via functional updater (avoids stale closure) ─
+    setExpenses((prev) =>
+      prev.map((item) => {
         if (item.id === id) {
           // Prevent editing locked OCR fields (category, amount, quantity)
           if (
@@ -264,7 +497,7 @@ export default function AddExpenseScreen() {
 
           const updated = { ...item, [field]: value };
 
-          // Calculate total if amount or quantity changes
+          // Recalculate total when amount or quantity changes
           if (field === "amount" || field === "quantity") {
             const amount =
               parseFloat(field === "amount" ? value : item.amount) || 0;
@@ -277,10 +510,23 @@ export default function AddExpenseScreen() {
           if (field === "title") {
             const trimmed = value.trim();
             if (trimmed.length >= 3) {
-              updated.category = categorizeItemForBusiness(
+              const localCategory = categorizeItemForBusiness(
                 trimmed,
                 user?.businessType,
               );
+              if (localCategory !== "General") {
+                // Solid local match — use it immediately
+                updated.category = localCategory;
+                updated.categorySource = "local";
+              } else if (item.categorySource !== "user") {
+                // Local engine gave up — AI will fill in after the debounce
+                updated.category = "";
+                updated.categorySource = undefined;
+              }
+            } else if (item.categorySource !== "user") {
+              // Title too short — clear so we don't show a stale category
+              updated.category = "";
+              updated.categorySource = undefined;
             }
           }
 
@@ -289,6 +535,11 @@ export default function AddExpenseScreen() {
         return item;
       }),
     );
+
+    // ── Kick off the debounced AI call after the state update ────────────
+    if (shouldTriggerAI) {
+      triggerAICategoryDebounced(id, value);
+    }
   };
 
   const handleSave = async () => {
@@ -1185,7 +1436,9 @@ If no items found or image is unclear, return: []`;
                       !item.category && styles.placeholderText,
                     ]}
                   >
-                    {item.category || "Select Category"}
+                    {categorizingIds.has(item.id)
+                      ? "Categorizing..."
+                      : item.category || "Select Category"}
                   </Text>
                   <ChevronDown color={COLORS.textGray} size={20} />
                 </TouchableOpacity>
