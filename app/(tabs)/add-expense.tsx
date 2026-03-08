@@ -496,13 +496,17 @@ export default function AddExpenseScreen() {
 
           const updated = { ...item, [field]: value };
 
-          // Recalculate total when amount or quantity changes
-          // Note: 'amount' is already the total cost for this line item;
-          // quantity is informational only (e.g. 0.25 kg at ₱50 total = ₱50).
+          // Recalculate total when amount or quantity changes.
+          // For fractional quantities (< 1, e.g. 0.25 kg), the amount entered
+          // is already the total cost for that weight — keep it as-is.
+          // For whole-number quantities (>= 1), total = amount × quantity.
           if (field === "amount" || field === "quantity") {
             const amount =
               parseFloat(field === "amount" ? value : item.amount) || 0;
-            updated.total = amount.toFixed(2);
+            const qty =
+              parseFloat(field === "quantity" ? value : item.quantity) || 1;
+            updated.total =
+              qty < 1 ? amount.toFixed(2) : (amount * qty).toFixed(2);
           }
 
           // Auto-categorize when the title changes
@@ -555,9 +559,9 @@ export default function AddExpenseScreen() {
       return;
     }
 
-    // Calculate total using amount directly (amount = total cost per line)
+    // Sum using the already-computed total per line item (qty × amount or as-is for fractional qty)
     const total = validExpenses.reduce(
-      (sum, exp) => sum + parseFloat(exp.amount || "0"),
+      (sum, exp) => sum + parseFloat(exp.total || "0"),
       0,
     );
 

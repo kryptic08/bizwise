@@ -168,8 +168,14 @@ export const addExpenseGroup = mutation({
       hour12: true,
     });
 
-    // amount is the total cost for that line item (quantity is informational, e.g. 0.25kg)
-    const totalAmount = args.items.reduce((sum, item) => sum + item.amount, 0);
+    // For fractional quantities (< 1, e.g. 0.25 kg), the entered amount is the full
+    // cost for that weight — keep as-is. For whole-number quantities (>= 1) multiply.
+    const computeItemTotal = (amount: number, qty: number) =>
+      qty < 1 ? amount : amount * qty;
+    const totalAmount = args.items.reduce(
+      (sum, item) => sum + computeItemTotal(item.amount, item.quantity),
+      0,
+    );
     const transactionId = generateExpenseId();
 
     // Create the expense transaction
@@ -194,11 +200,62 @@ export const addExpenseGroup = mutation({
         title: item.title,
         amount: item.amount,
         quantity: item.quantity,
-        total: item.amount, // amount is already the total cost for this line item
+        total: computeItemTotal(item.amount, item.quantity),
       });
     }
 
     return { expenseId, transactionId, itemCount: args.items.length };
+  },
+});
+
+/**
+ * Repair mutation — fixes expense items saved with the quantity-bug where
+ * total was stored as `amount` instead of `amount × quantity` for items
+ * with a whole-number quantity > 1. Also corrects the parent expense's
+ * totalAmount. Returns the number of items and expenses that were fixed.
+ */
+export const fixMiscalculatedExpenseItems = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const expenses = await ctx.db.query("expenses").collect();
+
+    let fixedItemCount = 0;
+    let affectedExpenseCount = 0;
+
+    for (const expense of expenses) {
+      const items = await ctx.db
+        .query("expenseItems")
+        .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
+        .collect();
+
+      let expenseNeedsUpdate = false;
+
+      for (const item of items) {
+        // Bugged items: quantity is a whole number > 1 but total === amount
+        if (item.quantity > 1 && Math.abs(item.total - item.amount) < 0.001) {
+          const correctTotal = item.amount * item.quantity;
+          await ctx.db.patch(item._id, { total: correctTotal });
+          fixedItemCount++;
+          expenseNeedsUpdate = true;
+        }
+      }
+
+      if (expenseNeedsUpdate) {
+        // Re-fetch updated items to recompute the expense's totalAmount
+        const updatedItems = await ctx.db
+          .query("expenseItems")
+          .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
+          .collect();
+        const newTotalAmount = updatedItems.reduce(
+          (sum, i) => sum + i.total,
+          0,
+        );
+        await ctx.db.patch(expense._id, { totalAmount: newTotalAmount });
+        affectedExpenseCount++;
+      }
+    }
+
+    return { fixedItemCount, affectedExpenseCount };
   },
 });
 
