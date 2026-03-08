@@ -524,3 +524,185 @@ class NLPExtractor:
             score = min(1.0, score + 0.10)
 
         return round(min(score, 1.0), 2)
+
+
+# ================================================================== #
+#  BERT Category Classifier (FUTURE USE / PLACEHOLDER)
+# ================================================================== #
+class BERTCategoryClassifier:
+    """
+    Classify each extracted line-item into an expense category using a
+    fine-tuned BERT sequence-classification model.
+
+    Motivation
+    ----------
+    The current pipeline assigns categories heuristically (keyword
+    matching in RegexExtractor).  A fine-tuned BERT model trained on
+    labelled receipt line-items would give significantly higher accuracy,
+    especially for ambiguous items ("chicken" → Food vs. Agriculture).
+
+    Planned categories (matches app expense categories):
+        Food & Beverages | Supplies | Utilities | Transport |
+        Equipment | Services | Rent | Salaries | Marketing |
+        Miscellaneous
+
+    Architecture
+    ------------
+    Base model : ``bert-base-uncased`` (or a smaller
+                 ``distilbert-base-uncased`` for lower RAM usage).
+    Fine-tuning: Multi-class classification head on top of [CLS] token.
+    Training data: Labelled receipt line-item text from the app's own
+                   transaction history (see data collection TODO below).
+
+    Requirements (NOT installed – add when upgrading server):
+        pip install torch transformers
+
+    Enable via env var:
+        USE_NLP_MODEL=true   (same flag as BERTExtractor, requires ≥ 1 GB RAM)
+
+    TODO list before enabling:
+        1. Collect & label ~2 000 line-item strings from real receipts.
+        2. Fine-tune distilbert-base-uncased for ~3 epochs.
+        3. Save checkpoint to ``models/category_classifier_v1/``.
+        4. Set MODEL_PATH = "models/category_classifier_v1".
+        5. Set USE_NLP_MODEL=true in .env.
+    """
+
+    # TODO: Set to fine-tuned checkpoint directory once training is done.
+    MODEL_PATH: Optional[str] = None
+
+    CATEGORIES: List[str] = [
+        "Food & Beverages",
+        "Supplies",
+        "Utilities",
+        "Transport",
+        "Equipment",
+        "Services",
+        "Rent",
+        "Salaries",
+        "Marketing",
+        "Miscellaneous",
+    ]
+
+    _instance: Optional["BERTCategoryClassifier"] = None
+
+    def __init__(self) -> None:
+        self._pipeline = None
+        self._loaded = False
+
+    @classmethod
+    def get_instance(cls) -> "BERTCategoryClassifier":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    # ---- lazy load ---- #
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        try:
+            from transformers import pipeline as hf_pipeline
+
+            if not self.MODEL_PATH:
+                logger.warning(
+                    "BERTCategoryClassifier: no MODEL_PATH set. "
+                    "Provide a fine-tuned checkpoint path to enable. "
+                    "Falling back to keyword-based categorisation."
+                )
+                self._loaded = False
+                return
+
+            self._pipeline = hf_pipeline(
+                "text-classification",
+                model=self.MODEL_PATH,
+                # Map label IDs back to human-readable category names.
+                # The fine-tuned model should output LABEL_0…LABEL_N;
+                # id2label in its config should be set during training.
+            )
+            self._loaded = True
+            logger.info(f"BERTCategoryClassifier loaded from {self.MODEL_PATH}")
+
+        except ImportError:
+            logger.warning(
+                "BERTCategoryClassifier unavailable – install torch + transformers."
+            )
+            self._loaded = False
+        except Exception as exc:
+            logger.error(f"BERTCategoryClassifier load failed: {exc}")
+            self._loaded = False
+
+    @property
+    def is_available(self) -> bool:
+        self._ensure_loaded()
+        return self._loaded and self._pipeline is not None
+
+    def classify(self, line_item_text: str) -> Dict:
+        """
+        Classify a single line-item description into an expense category.
+
+        Args:
+            line_item_text: Raw text of the line item, e.g. ``"2x Bottled Water 1L"``.
+
+        Returns:
+            {
+                "category": str,   # e.g. "Food & Beverages"
+                "score":    float, # confidence 0–1
+                "source":   str,   # "bert" | "fallback"
+            }
+        """
+        if not self.is_available:
+            return {
+                "category": "Miscellaneous",
+                "score": 1.0,
+                "source": "fallback",
+            }
+
+        try:
+            result = self._pipeline(line_item_text[:128])[0]  # BERT token limit
+            label = result.get("label", "Miscellaneous")
+            # Normalise label: fine-tuned model may output "LABEL_0" → look up
+            if label.startswith("LABEL_"):
+                idx = int(label.split("_")[1])
+                label = self.CATEGORIES[idx] if idx < len(self.CATEGORIES) else "Miscellaneous"
+            return {
+                "category": label,
+                "score": round(float(result.get("score", 0.0)), 4),
+                "source": "bert",
+            }
+        except Exception as exc:
+            logger.warning(f"BERTCategoryClassifier.classify failed: {exc}")
+            return {
+                "category": "Miscellaneous",
+                "score": 1.0,
+                "source": "fallback",
+            }
+
+    def classify_batch(self, line_items: List[str]) -> List[Dict]:
+        """
+        Classify a list of line-item descriptions in one forward pass.
+
+        More efficient than calling ``classify`` in a loop when the
+        model is available, since HuggingFace pipelines batch
+        automatically.
+        """
+        if not self.is_available or not line_items:
+            return [self.classify(item) for item in line_items]
+
+        try:
+            truncated = [t[:128] for t in line_items]
+            results = self._pipeline(truncated)
+            output = []
+            for res in results:
+                label = res.get("label", "Miscellaneous")
+                if label.startswith("LABEL_"):
+                    idx = int(label.split("_")[1])
+                    label = self.CATEGORIES[idx] if idx < len(self.CATEGORIES) else "Miscellaneous"
+                output.append({
+                    "category": label,
+                    "score": round(float(res.get("score", 0.0)), 4),
+                    "source": "bert",
+                })
+            return output
+        except Exception as exc:
+            logger.warning(f"BERTCategoryClassifier.classify_batch failed: {exc}")
+            return [self.classify(item) for item in line_items]

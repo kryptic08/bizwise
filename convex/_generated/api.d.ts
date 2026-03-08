@@ -15,6 +15,7 @@ import type * as clearData from "../clearData.js";
 import type * as debugUsers from "../debugUsers.js";
 import type * as expenses from "../expenses.js";
 import type * as files from "../files.js";
+import type * as fixSundayLeakDates from "../fixSundayLeakDates.js";
 import type * as products from "../products.js";
 import type * as sales from "../sales.js";
 import type * as seed from "../seed.js";
@@ -38,6 +39,7 @@ declare const fullApi: ApiFromModules<{
   debugUsers: typeof debugUsers;
   expenses: typeof expenses;
   files: typeof files;
+  fixSundayLeakDates: typeof fixSundayLeakDates;
   products: typeof products;
   sales: typeof sales;
   seed: typeof seed;
