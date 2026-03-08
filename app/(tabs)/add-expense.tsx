@@ -497,12 +497,12 @@ export default function AddExpenseScreen() {
           const updated = { ...item, [field]: value };
 
           // Recalculate total when amount or quantity changes
+          // Note: 'amount' is already the total cost for this line item;
+          // quantity is informational only (e.g. 0.25 kg at ₱50 total = ₱50).
           if (field === "amount" || field === "quantity") {
             const amount =
               parseFloat(field === "amount" ? value : item.amount) || 0;
-            const quantity =
-              parseFloat(field === "quantity" ? value : item.quantity) || 0;
-            updated.total = (amount * quantity).toFixed(2);
+            updated.total = amount.toFixed(2);
           }
 
           // Auto-categorize when the title changes
@@ -555,9 +555,9 @@ export default function AddExpenseScreen() {
       return;
     }
 
-    // Calculate total
+    // Calculate total using amount directly (amount = total cost per line)
     const total = validExpenses.reduce(
-      (sum, exp) => sum + parseFloat(exp.total || "0"),
+      (sum, exp) => sum + parseFloat(exp.amount || "0"),
       0,
     );
 
@@ -577,7 +577,7 @@ export default function AddExpenseScreen() {
                 category: expense.category || "General",
                 title: expense.title,
                 amount: parseFloat(expense.amount),
-                quantity: parseInt(expense.quantity) || 1,
+                quantity: parseFloat(expense.quantity) || 1,
               }));
 
               if (!isOnline) {
@@ -602,6 +602,9 @@ export default function AddExpenseScreen() {
               const tempId = result.transactionId;
 
               // Reset form after successful save
+              const resetToday = new Date();
+              resetToday.setHours(0, 0, 0, 0);
+              setSelectedDate(resetToday); // reset date so cache doesn't restore a stale date
               setExpenses([
                 {
                   id: Date.now().toString(),

@@ -1,5 +1,5 @@
-import { useMutation } from "convex/react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "convex/react";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { api } from "../../convex/_generated/api";
 
@@ -26,7 +26,6 @@ export interface ExpenseItemData {
   title: string;
   amount: number;
   quantity: number;
-  total: number;
 }
 
 export interface ExpenseData {
@@ -38,13 +37,17 @@ export interface ExpenseData {
 }
 
 interface MutationQueueContextType {
-  createSale: (data: SaleData) => Promise<{ saleId: string; transactionId: string }>;
-  createExpense: (data: ExpenseData) => Promise<{ expenseId: string; transactionId: string }>;
+  createSale: (
+    data: SaleData,
+  ) => Promise<{ saleId: string; transactionId: string }>;
+  createExpense: (
+    data: ExpenseData,
+  ) => Promise<{ expenseId: string; transactionId: string }>;
 }
 
-const MutationQueueContext = createContext<MutationQueueContextType | undefined>(
-  undefined
-);
+const MutationQueueContext = createContext<
+  MutationQueueContextType | undefined
+>(undefined);
 
 export function MutationQueueProvider({
   children,
@@ -57,7 +60,9 @@ export function MutationQueueProvider({
   const createSaleMutation = useMutation(api.sales.createSale);
   const createExpenseMutation = useMutation(api.expenses.addExpenseGroup);
 
-  const createSale = async (data: SaleData): Promise<{ saleId: string; transactionId: string }> => {
+  const createSale = async (
+    data: SaleData,
+  ): Promise<{ saleId: string; transactionId: string }> => {
     setIsLoading(true);
     try {
       const result = await createSaleMutation({
@@ -76,7 +81,9 @@ export function MutationQueueProvider({
     }
   };
 
-  const createExpense = async (data: ExpenseData): Promise<{ expenseId: string; transactionId: string }> => {
+  const createExpense = async (
+    data: ExpenseData,
+  ): Promise<{ expenseId: string; transactionId: string }> => {
     setIsLoading(true);
     try {
       const result = await createExpenseMutation({
@@ -100,7 +107,7 @@ export function MutationQueueProvider({
       createSale,
       createExpense,
     }),
-    [createSaleMutation, createExpenseMutation, queryClient]
+    [createSaleMutation, createExpenseMutation, queryClient],
   );
 
   return (
@@ -114,7 +121,7 @@ export function useMutationQueue() {
   const context = useContext(MutationQueueContext);
   if (context === undefined) {
     throw new Error(
-      "useMutationQueue must be used within a MutationQueueProvider"
+      "useMutationQueue must be used within a MutationQueueProvider",
     );
   }
   return context;

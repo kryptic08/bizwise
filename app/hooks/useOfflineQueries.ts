@@ -99,15 +99,16 @@ export function useFinancialSummary(userId: string | undefined) {
 // Hook for daily analytics (reactive)
 export function useDailyAnalytics(
   userId: string | undefined,
-  days: number = 7,
+  startDate: string,
+  endDate: string,
 ) {
   const live = useQuery(
     api.analytics.getDailyAnalytics,
-    userId ? { userId: userId as UserId, days } : "skip",
+    userId ? { userId: userId as UserId, startDate, endDate } : "skip",
   );
   return useOfflineCached(
     live,
-    userId ? `daily_analytics_${userId}_${days}` : undefined,
+    userId ? `daily_analytics_${userId}_${startDate}_${endDate}` : undefined,
   );
 }
 
@@ -115,14 +116,23 @@ export function useDailyAnalytics(
 export function useWeeklyAnalytics(
   userId: string | undefined,
   weeks: number = 7,
+  todayLocalStr?: string,
 ) {
   const live = useQuery(
     api.analytics.getWeeklyAnalytics,
-    userId ? { userId: userId as UserId, weeks } : "skip",
+    userId
+      ? {
+          userId: userId as UserId,
+          weeks,
+          ...(todayLocalStr ? { todayLocalStr } : {}),
+        }
+      : "skip",
   );
   return useOfflineCached(
     live,
-    userId ? `weekly_analytics_${userId}_${weeks}` : undefined,
+    userId
+      ? `weekly_analytics_${userId}_${weeks}_${todayLocalStr ?? ""}`
+      : undefined,
   );
 }
 
@@ -165,6 +175,27 @@ export function useTargetProgress(userId: string | undefined) {
   return useOfflineCached(
     live,
     userId ? `target_progress_${userId}` : undefined,
+  );
+}
+
+// Combined dashboard hook — replaces 7 separate subscriptions with 1 (~80% bandwidth reduction)
+export function useDashboardData(
+  userId: string | undefined,
+  todayLocalStr: string,
+  weekStartDate: string,
+  weekEndDate: string,
+) {
+  const live = useQuery(
+    api.analytics.getDashboardData,
+    userId
+      ? { userId: userId as UserId, todayLocalStr, weekStartDate, weekEndDate }
+      : "skip",
+  );
+  return useOfflineCached(
+    live,
+    userId
+      ? `dashboard_data_${userId}_${todayLocalStr}_${weekStartDate}_${weekEndDate}`
+      : undefined,
   );
 }
 

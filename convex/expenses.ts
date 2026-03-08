@@ -44,21 +44,14 @@ export const getExpensesByDateRange = query({
   },
 });
 
-// Generate expense transaction ID for a user
-const generateExpenseId = async (ctx: any, userId?: any): Promise<string> => {
-  // Count all expenses for the user to get unique sequential number
-  let allExpenses;
-  if (userId) {
-    allExpenses = await ctx.db
-      .query("expenses")
-      .withIndex("by_user", (q: any) => q.eq("userId", userId))
-      .collect();
-  } else {
-    allExpenses = await ctx.db.query("expenses").collect();
+// Generate a random expense transaction ID (e.g. EXP-B72K)
+const generateExpenseId = (): string => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let id = "";
+  for (let i = 0; i < 4; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
   }
-
-  const nextNumber = allExpenses.length + 1;
-  return `EXP-${nextNumber.toString().padStart(3, "0")}`;
+  return `EXP-${id}`;
 };
 
 // Add expense for a user (legacy - single item)
@@ -73,16 +66,21 @@ export const addExpense = mutation({
     receiptImage: v.optional(v.string()), // Legacy: local URI
     ocrText: v.optional(v.string()),
     clientTimestamp: v.optional(v.number()), // Device timestamp
+    localDateStr: v.optional(v.string()), // YYYY-MM-DD in client local time
   },
   handler: async (ctx, args) => {
-    // Use client timestamp if provided, otherwise use server time
     const timestamp = args.clientTimestamp || Date.now();
+    // Use client-provided local date string to avoid UTC offset issues
+    let date: string;
     const now = new Date(timestamp);
-    // Extract date components - the client timestamp is already in local time
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    const date = `${year}-${month}-${day}`;
+    if (args.localDateStr) {
+      date = args.localDateStr;
+    } else {
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      date = `${year}-${month}-${day}`;
+    }
     const time = now.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -90,7 +88,7 @@ export const addExpense = mutation({
     });
 
     const total = args.amount * args.quantity;
-    const transactionId = await generateExpenseId(ctx, args.userId);
+    const transactionId = generateExpenseId();
 
     const expenseId = await ctx.db.insert("expenses", {
       userId: args.userId,
@@ -170,12 +168,9 @@ export const addExpenseGroup = mutation({
       hour12: true,
     });
 
-    // Calculate total for all items
-    const totalAmount = args.items.reduce(
-      (sum, item) => sum + item.amount * item.quantity,
-      0,
-    );
-    const transactionId = await generateExpenseId(ctx, args.userId);
+    // amount is the total cost for that line item (quantity is informational, e.g. 0.25kg)
+    const totalAmount = args.items.reduce((sum, item) => sum + item.amount, 0);
+    const transactionId = generateExpenseId();
 
     // Create the expense transaction
     const expenseId = await ctx.db.insert("expenses", {
@@ -199,7 +194,7 @@ export const addExpenseGroup = mutation({
         title: item.title,
         amount: item.amount,
         quantity: item.quantity,
-        total: item.amount * item.quantity,
+        total: item.amount, // amount is already the total cost for this line item
       });
     }
 

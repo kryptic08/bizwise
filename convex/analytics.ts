@@ -9,12 +9,16 @@ export const getFinancialSummary = query({
     // Get sales and calculate totals in parallel
     let sales;
     if (args.userId) {
-      sales = await ctx.db
-        .query("sales")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId))
-        .collect();
+      sales = (
+        await ctx.db
+          .query("sales")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect()
+      ).filter((s) => !s.deletedAt);
     } else {
-      sales = await ctx.db.query("sales").collect();
+      sales = (await ctx.db.query("sales").collect()).filter(
+        (s) => !s.deletedAt,
+      );
     }
 
     // Get expenses in parallel with sale items processing
@@ -24,7 +28,11 @@ export const getFinancialSummary = query({
             .query("expenses")
             .withIndex("by_user", (q) => q.eq("userId", args.userId))
             .collect()
-        : ctx.db.query("expenses").collect(),
+            .then((arr) => arr.filter((e) => !e.deletedAt))
+        : ctx.db
+            .query("expenses")
+            .collect()
+            .then((arr) => arr.filter((e) => !e.deletedAt)),
 
       // Fetch all sale items in parallel (batch operation)
       Promise.all(
@@ -78,18 +86,20 @@ export const getFinancialSummary = query({
 // Get daily analytics for charts for a user
 export const getDailyAnalytics = query({
   args: {
-    days: v.number(),
+    startDate: v.string(), // YYYY-MM-DD in client local time (Monday of current week)
+    endDate: v.string(), // YYYY-MM-DD in client local time (Sunday of current week)
     userId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    const today = new Date();
-    const startDate = new Date(
-      today.getTime() - args.days * 24 * 60 * 60 * 1000,
-    );
-
-    const dateArray = [];
-    for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
-      dateArray.push(d.toISOString().slice(0, 10));
+    // Build date array from client-provided local date strings (avoids UTC offset issues)
+    const dateArray: string[] = [];
+    const start = new Date(args.startDate + "T00:00:00");
+    const end = new Date(args.endDate + "T00:00:00");
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      dateArray.push(`${y}-${m}-${day}`);
     }
 
     const analytics = await Promise.all(
@@ -126,8 +136,12 @@ export const getDailyAnalytics = query({
             .collect();
         }
 
-        const income = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
-        const expense = expenses.reduce((sum, exp) => sum + exp.totalAmount, 0);
+        const income = sales
+          .filter((s) => !s.deletedAt)
+          .reduce((sum, sale) => sum + sale.totalAmount, 0);
+        const expense = expenses
+          .filter((e) => !e.deletedAt)
+          .reduce((sum, exp) => sum + exp.totalAmount, 0);
 
         return {
           date,
@@ -232,8 +246,12 @@ export const getMonthlyAnalytics = query({
           ]);
         }
 
-        const income = sales.reduce((sum, s) => sum + s.totalAmount, 0);
-        const expense = expenses.reduce((sum, e) => sum + e.totalAmount, 0);
+        const income = sales
+          .filter((s) => !s.deletedAt)
+          .reduce((sum, s) => sum + s.totalAmount, 0);
+        const expense = expenses
+          .filter((e) => !e.deletedAt)
+          .reduce((sum, e) => sum + e.totalAmount, 0);
 
         return {
           month: monthNames[month],
@@ -691,22 +709,38 @@ export const getWeeklyAnalytics = query({
   args: {
     weeks: v.number(),
     userId: v.optional(v.id("users")),
+    todayLocalStr: v.optional(v.string()), // YYYY-MM-DD in client local time
   },
   handler: async (ctx, args) => {
-    const today = new Date();
+    // Use client's local today string to avoid UTC offset issues
+    const todayStr =
+      args.todayLocalStr ?? new Date().toISOString().slice(0, 10);
+    const today = new Date(todayStr + "T00:00:00");
     const analytics = [];
+
+    // Monday-start: how many days back to reach the Monday of this week
+    const todayDow = today.getDay();
+    const daysToCurrentMonday = todayDow === 0 ? 6 : todayDow - 1;
+
+    // Helper: format Date as YYYY-MM-DD using local date parts
+    const fmtDate = (d: Date): string => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    };
 
     for (let i = args.weeks - 1; i >= 0; i--) {
       const weekStart = new Date(today);
-      weekStart.setDate(today.getDate() - (i * 7 + today.getDay()));
+      weekStart.setDate(today.getDate() - (i * 7 + daysToCurrentMonday));
       weekStart.setHours(0, 0, 0, 0);
 
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekStart.getDate() + 6);
       weekEnd.setHours(23, 59, 59, 999);
 
-      const startDateStr = weekStart.toISOString().slice(0, 10);
-      const endDateStr = weekEnd.toISOString().slice(0, 10);
+      const startDateStr = fmtDate(weekStart);
+      const endDateStr = fmtDate(weekEnd);
 
       // Generate date array for the week
       const weekDates = [];
@@ -715,7 +749,7 @@ export const getWeeklyAnalytics = query({
         d <= weekEnd;
         d.setDate(d.getDate() + 1)
       ) {
-        weekDates.push(d.toISOString().slice(0, 10));
+        weekDates.push(fmtDate(d));
       }
 
       // Query each day in the week using compound index
@@ -755,9 +789,13 @@ export const getWeeklyAnalytics = query({
         }),
       );
 
-      // Aggregate the week's data
-      const allSales = weekData.flatMap((d) => d.sales);
-      const allExpenses = weekData.flatMap((d) => d.expenses);
+      // Aggregate the week's data (exclude soft-deleted records)
+      const allSales = weekData
+        .flatMap((d) => d.sales)
+        .filter((s) => !s.deletedAt);
+      const allExpenses = weekData
+        .flatMap((d) => d.expenses)
+        .filter((e) => !e.deletedAt);
 
       const income = allSales.reduce((sum, sale) => sum + sale.totalAmount, 0);
       const expense = allExpenses.reduce(
@@ -781,22 +819,36 @@ export const getWeeklyAnalytics = query({
 });
 
 // Get top selling product for a user
+// Fixed: queries user's own sales first (indexed), then fetches only their saleItems
+// Old approach scanned ALL saleItems from ALL users — very wasteful
 export const getTopSellingProduct = query({
   args: { userId: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
-    // Get all sale items
-    const saleItems = await ctx.db.query("saleItems").collect();
-
-    // Filter by user if needed
-    let filteredItems = saleItems;
+    // Fetch user's non-deleted sales via index (not a full table scan)
+    let activeSales;
     if (args.userId) {
-      const userSales = await ctx.db
-        .query("sales")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId))
-        .collect();
-      const userSaleIds = new Set(userSales.map((s) => s._id));
-      filteredItems = saleItems.filter((item) => userSaleIds.has(item.saleId));
+      activeSales = (
+        await ctx.db
+          .query("sales")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect()
+      ).filter((s) => !s.deletedAt);
+    } else {
+      activeSales = (await ctx.db.query("sales").collect()).filter(
+        (s) => !s.deletedAt,
+      );
     }
+
+    // Fetch saleItems only for this user's sales (capped at 200 to stay within limits)
+    const saleItemArrays = await Promise.all(
+      activeSales.slice(0, 200).map((s) =>
+        ctx.db
+          .query("saleItems")
+          .withIndex("by_sale", (q) => q.eq("saleId", s._id))
+          .collect(),
+      ),
+    );
+    const filteredItems = saleItemArrays.flat();
 
     // Count quantities by product
     const productCounts = new Map<string, { name: string; count: number }>();
@@ -812,12 +864,9 @@ export const getTopSellingProduct = query({
       }
     }
 
-    // Find the top product
     let topProduct = { name: "No Sales Yet", count: 0 };
     for (const product of productCounts.values()) {
-      if (product.count > topProduct.count) {
-        topProduct = product;
-      }
+      if (product.count > topProduct.count) topProduct = product;
     }
 
     return topProduct;
@@ -825,24 +874,35 @@ export const getTopSellingProduct = query({
 });
 
 // Get top selling category for a user
+// Fixed: same user-indexed approach as getTopSellingProduct
 export const getTopSellingCategory = query({
   args: { userId: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
-    // Get all sale items
-    const saleItems = await ctx.db.query("saleItems").collect();
-
-    // Filter by user if needed
-    let filteredItems = saleItems;
+    // Fetch user's non-deleted sales via index
+    let activeSales;
     if (args.userId) {
-      const userSales = await ctx.db
-        .query("sales")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId))
-        .collect();
-      const userSaleIds = new Set(userSales.map((s) => s._id));
-      filteredItems = saleItems.filter((item) => userSaleIds.has(item.saleId));
+      activeSales = (
+        await ctx.db
+          .query("sales")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect()
+      ).filter((s) => !s.deletedAt);
+    } else {
+      activeSales = (await ctx.db.query("sales").collect()).filter(
+        (s) => !s.deletedAt,
+      );
     }
 
-    // Count quantities by category
+    const saleItemArrays = await Promise.all(
+      activeSales.slice(0, 200).map((s) =>
+        ctx.db
+          .query("saleItems")
+          .withIndex("by_sale", (q) => q.eq("saleId", s._id))
+          .collect(),
+      ),
+    );
+    const filteredItems = saleItemArrays.flat();
+
     const categoryCounts = new Map<string, { name: string; count: number }>();
     for (const item of filteredItems) {
       const existing = categoryCounts.get(item.category);
@@ -856,12 +916,9 @@ export const getTopSellingCategory = query({
       }
     }
 
-    // Find the top category
     let topCategory = { name: "No Sales Yet", count: 0 };
     for (const category of categoryCounts.values()) {
-      if (category.count > topCategory.count) {
-        topCategory = category;
-      }
+      if (category.count > topCategory.count) topCategory = category;
     }
 
     return topCategory;
@@ -935,6 +992,283 @@ export const getTargetProgress = query({
       status,
       currentDay,
       totalDaysInMonth,
+    };
+  },
+});
+
+// Combined dashboard query — returns ALL data the home screen needs in ONE subscription.
+// Replaces 7 separate subscriptions (getFinancialSummary, getDailyAnalytics,
+// getWeeklyAnalytics, getMonthlyAnalytics, getTopSellingProduct,
+// getTopSellingCategory, getTargetProgress) → ~80% bandwidth reduction.
+//
+// Sunday-leak proof: date arithmetic uses client-provided local date strings
+// (weekStartDate, weekEndDate, todayLocalStr) so Philippines 12AM–7:59AM
+// transactions are stored on the correct local day, not the UTC-previous day.
+export const getDashboardData = query({
+  args: {
+    userId: v.id("users"),
+    todayLocalStr: v.string(), // YYYY-MM-DD in client local time
+    weekStartDate: v.string(), // Monday of current week (YYYY-MM-DD)
+    weekEndDate: v.string(), // Sunday of current week (YYYY-MM-DD)
+    weeksCount: v.optional(v.number()), // Weeks for weekly chart (default 7)
+  },
+  handler: async (ctx, args) => {
+    const weeksCount = args.weeksCount ?? 7;
+
+    // ── Fetch user, sales, expenses ONCE via indexed queries ────────────
+    const [user, allSales, allExpenses] = await Promise.all([
+      ctx.db.get(args.userId),
+      ctx.db
+        .query("sales")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect(),
+      ctx.db
+        .query("expenses")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect(),
+    ]);
+
+    const activeSales = allSales.filter((s) => !s.deletedAt);
+    const activeExpenses = allExpenses.filter((e) => !e.deletedAt);
+
+    // ── Helper: format Date → YYYY-MM-DD ───────────────────────────────
+    const fmtDate = (d: Date): string => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    };
+
+    // ── Financial Summary ───────────────────────────────────────────────
+    // Uses stored totalAmount and itemCount — no saleItems scan needed here
+    const totalIncome = activeSales.reduce((sum, s) => sum + s.totalAmount, 0);
+    const totalExpense = activeExpenses.reduce(
+      (sum, e) => sum + e.totalAmount,
+      0,
+    );
+    const productsSold = activeSales.reduce((sum, s) => sum + s.itemCount, 0);
+
+    // ── Top Product & Category ──────────────────────────────────────────
+    // Scan saleItems ONCE for this user's sales (capped at 200 sales)
+    const salesForItems = activeSales.slice(0, 200);
+    const saleItemArrays = await Promise.all(
+      salesForItems.map((s) =>
+        ctx.db
+          .query("saleItems")
+          .withIndex("by_sale", (q) => q.eq("saleId", s._id))
+          .collect(),
+      ),
+    );
+    const saleItems = saleItemArrays.flat();
+
+    const productMap = new Map<string, { name: string; count: number }>();
+    const categoryMap = new Map<string, { name: string; count: number }>();
+    for (const item of saleItems) {
+      const p = productMap.get(item.productName);
+      if (p) p.count += item.quantity;
+      else
+        productMap.set(item.productName, {
+          name: item.productName,
+          count: item.quantity,
+        });
+      const c = categoryMap.get(item.category);
+      if (c) c.count += item.quantity;
+      else
+        categoryMap.set(item.category, {
+          name: item.category,
+          count: item.quantity,
+        });
+    }
+    let topProduct = { name: "No Sales Yet", count: 0 };
+    for (const p of productMap.values())
+      if (p.count > topProduct.count) topProduct = p;
+    let topCategory = { name: "No Sales Yet", count: 0 };
+    for (const c of categoryMap.values())
+      if (c.count > topCategory.count) topCategory = c;
+
+    // ── Daily Analytics (Mon–Sun of current week, in-memory) ───────────
+    const weekStart = new Date(args.weekStartDate + "T00:00:00");
+    const weekEnd = new Date(args.weekEndDate + "T00:00:00");
+    const dailyAnalytics: {
+      date: string;
+      income: number;
+      expense: number;
+      profit: number;
+    }[] = [];
+    for (
+      let d = new Date(weekStart);
+      d <= weekEnd;
+      d.setDate(d.getDate() + 1)
+    ) {
+      const dateStr = fmtDate(d);
+      const income = activeSales
+        .filter((s) => s.date === dateStr)
+        .reduce((sum, s) => sum + s.totalAmount, 0);
+      const expense = activeExpenses
+        .filter((e) => e.date === dateStr)
+        .reduce((sum, e) => sum + e.totalAmount, 0);
+      dailyAnalytics.push({
+        date: dateStr,
+        income,
+        expense,
+        profit: income - expense,
+      });
+    }
+
+    // ── Weekly Analytics (last N weeks, Monday-start, in-memory) ───────
+    const today = new Date(args.todayLocalStr + "T00:00:00");
+    const todayDow = today.getDay();
+    const daysToCurrentMonday = todayDow === 0 ? 6 : todayDow - 1;
+    const weeklyAnalytics: {
+      weekStart: string;
+      weekEnd: string;
+      income: number;
+      expense: number;
+      profit: number;
+    }[] = [];
+    for (let i = weeksCount - 1; i >= 0; i--) {
+      const wStart = new Date(today);
+      wStart.setDate(today.getDate() - (i * 7 + daysToCurrentMonday));
+      wStart.setHours(0, 0, 0, 0);
+      const wEnd = new Date(wStart);
+      wEnd.setDate(wStart.getDate() + 6);
+      const startStr = fmtDate(wStart);
+      const endStr = fmtDate(wEnd);
+      const income = activeSales
+        .filter((s) => s.date >= startStr && s.date <= endStr)
+        .reduce((sum, s) => sum + s.totalAmount, 0);
+      const expense = activeExpenses
+        .filter((e) => e.date >= startStr && e.date <= endStr)
+        .reduce((sum, e) => sum + e.totalAmount, 0);
+      weeklyAnalytics.push({
+        weekStart: startStr,
+        weekEnd: endStr,
+        income,
+        expense,
+        profit: income - expense,
+      });
+    }
+
+    // ── Monthly Analytics (last 12 months, in-memory) ──────────────────
+    const MONTH_NAMES = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+    const now = new Date();
+    const monthlyAnalytics: {
+      month: string;
+      monthNumber: number;
+      income: number;
+      expense: number;
+      profit: number;
+    }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const monthDate = new Date(
+        now.getFullYear(),
+        now.getMonth() - (11 - i),
+        1,
+      );
+      const mm = String(monthDate.getMonth() + 1).padStart(2, "0");
+      const startDate = `${monthDate.getFullYear()}-${mm}-01`;
+      const nextM = monthDate.getMonth() + 1;
+      const endYear =
+        nextM > 11 ? monthDate.getFullYear() + 1 : monthDate.getFullYear();
+      const endMM = String((nextM > 11 ? 0 : nextM) + 1).padStart(2, "0");
+      const endDate = `${endYear}-${endMM}-01`;
+      const income = activeSales
+        .filter((s) => s.date >= startDate && s.date < endDate)
+        .reduce((sum, s) => sum + s.totalAmount, 0);
+      const expense = activeExpenses
+        .filter((e) => e.date >= startDate && e.date < endDate)
+        .reduce((sum, e) => sum + e.totalAmount, 0);
+      monthlyAnalytics.push({
+        month: MONTH_NAMES[monthDate.getMonth()],
+        monthNumber: monthDate.getMonth() + 1,
+        income,
+        expense,
+        profit: income - expense,
+      });
+    }
+
+    // ── Target Progress ─────────────────────────────────────────────────
+    // Uses todayLocalStr (client local date) to avoid UTC midnight miscount
+    // e.g. Philippines 12AM–7:59AM = previous UTC day → wrong month detection fixed
+    type TargetProgressResult = {
+      target: number;
+      current: number;
+      remaining: number;
+      progressPercentage: number;
+      daysRemaining: number;
+      requiredDailyIncome: number;
+      status: "ahead" | "on-track" | "behind";
+      currentDay: number;
+      totalDaysInMonth: number;
+    };
+    let targetProgress: TargetProgressResult | null = null;
+    if (user && user.targetIncome && user.targetIncome.monthly) {
+      const target = user.targetIncome.monthly;
+      const clientToday = new Date(args.todayLocalStr + "T00:00:00");
+      const currentDay = clientToday.getDate();
+      const endOfMonthDate = new Date(
+        clientToday.getFullYear(),
+        clientToday.getMonth() + 1,
+        0,
+      );
+      const totalDaysInMonth = endOfMonthDate.getDate();
+      const mm = String(clientToday.getMonth() + 1).padStart(2, "0");
+      const startOfMonthStr = `${clientToday.getFullYear()}-${mm}-01`;
+      const endOfMonthStr = fmtDate(endOfMonthDate);
+      const currentIncome = activeSales
+        .filter((s) => s.date >= startOfMonthStr && s.date <= endOfMonthStr)
+        .reduce((sum, s) => sum + s.totalAmount, 0);
+      const progressPercentage = (currentIncome / target) * 100;
+      const remaining = target - currentIncome;
+      const daysRemaining = totalDaysInMonth - currentDay;
+      const requiredDailyIncome =
+        daysRemaining > 0 ? remaining / daysRemaining : 0;
+      const expectedIncome = (target / totalDaysInMonth) * currentDay;
+      let status: "ahead" | "on-track" | "behind" = "on-track";
+      if (currentIncome >= target) status = "ahead";
+      else if (currentIncome >= expectedIncome * 0.9) status = "on-track";
+      else status = "behind";
+      targetProgress = {
+        target,
+        current: currentIncome,
+        remaining: Math.max(0, remaining),
+        progressPercentage: Math.min(100, progressPercentage),
+        daysRemaining,
+        requiredDailyIncome: Math.max(0, requiredDailyIncome),
+        status,
+        currentDay,
+        totalDaysInMonth,
+      };
+    }
+
+    return {
+      financialSummary: {
+        totalBalance: totalIncome - totalExpense,
+        totalIncome,
+        totalExpense,
+        profit: totalIncome - totalExpense,
+        productsSold,
+        transactionCount: activeSales.length,
+      },
+      topProduct,
+      topCategory,
+      dailyAnalytics,
+      weeklyAnalytics,
+      monthlyAnalytics,
+      targetProgress,
     };
   },
 });

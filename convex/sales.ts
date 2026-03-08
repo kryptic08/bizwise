@@ -58,24 +58,14 @@ export const getSalesByDateRange = query({
   },
 });
 
-// Generate transaction ID for a user
-const generateTransactionId = async (
-  ctx: any,
-  userId?: any,
-): Promise<string> => {
-  // Count all sales for the user to get unique sequential number
-  let allSales;
-  if (userId) {
-    allSales = await ctx.db
-      .query("sales")
-      .withIndex("by_user", (q: any) => q.eq("userId", userId))
-      .collect();
-  } else {
-    allSales = await ctx.db.query("sales").collect();
+// Generate a random transaction ID (e.g. SL-A3F9)
+const generateTransactionId = (): string => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let id = "";
+  for (let i = 0; i < 4; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
   }
-
-  const nextNumber = allSales.length + 1;
-  return `SL-${nextNumber.toString().padStart(3, "0")}`;
+  return `SL-${id}`;
 };
 
 // Create sale with items for a user
@@ -137,7 +127,7 @@ export const createSale = mutation({
     const change = args.paymentReceived - totalAmount;
 
     // Generate transaction ID
-    const transactionId = await generateTransactionId(ctx, args.userId);
+    const transactionId = generateTransactionId();
 
     // Create sale record
     const saleId = await ctx.db.insert("sales", {

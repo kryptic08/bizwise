@@ -34,15 +34,7 @@ import Svg, {
 } from "react-native-svg";
 import { OfflineIndicator } from "../components/OfflineIndicator";
 import { useAuth } from "../context/AuthContext";
-import {
-  useDailyAnalytics,
-  useFinancialSummary,
-  useMonthlyAnalytics,
-  useTargetProgress,
-  useTopCategory,
-  useTopProduct,
-  useWeeklyAnalytics,
-} from "../hooks/useOfflineQueries";
+import { useDashboardData } from "../hooks/useOfflineQueries";
 import { checkTargetProgress } from "../utils/notificationChecker";
 import { NotificationSettings } from "../utils/notificationService";
 
@@ -96,13 +88,37 @@ export default function HomeScreen() {
     return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
   };
 
-  const { data: financialSummary } = useFinancialSummary(user?.userId);
-  const { data: dailyAnalytics } = useDailyAnalytics(user?.userId, 7);
-  const { data: weeklyAnalytics } = useWeeklyAnalytics(user?.userId, 7);
-  const { data: monthlyAnalytics } = useMonthlyAnalytics(user?.userId);
-  const { data: topProduct } = useTopProduct(user?.userId);
-  const { data: topCategory } = useTopCategory(user?.userId);
-  const { data: targetProgress } = useTargetProgress(user?.userId);
+  // Compute current week boundaries in client local time (Monday-start) to avoid UTC issues
+  const todayLocalStr = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+  const currentWeekStartStr = useMemo(() => {
+    const d = new Date();
+    const dow = d.getDay();
+    d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+  const currentWeekEndStr = useMemo(() => {
+    const d = new Date();
+    const dow = d.getDay();
+    d.setDate(d.getDate() + (dow === 0 ? 0 : 7 - dow));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  // Single combined query replaces 7 separate subscriptions (~80% bandwidth reduction)
+  const { data: dashboardData } = useDashboardData(
+    user?.userId,
+    todayLocalStr,
+    currentWeekStartStr,
+    currentWeekEndStr,
+  );
+  const dailyAnalytics = dashboardData?.dailyAnalytics;
+  const weeklyAnalytics = dashboardData?.weeklyAnalytics;
+  const monthlyAnalytics = dashboardData?.monthlyAnalytics;
+  const topProduct = dashboardData?.topProduct;
+  const topCategory = dashboardData?.topCategory;
+  const targetProgress = dashboardData?.targetProgress;
 
   // Check target progress and trigger notifications
   useEffect(() => {
@@ -133,24 +149,34 @@ export default function HomeScreen() {
     checkNotifications();
   }, [targetProgress, user?.userId]);
 
-  // Helper function to get the number of weeks in current month
+  // Helper: short date format e.g. "Mar 1"
+  const fmtShort = (d: Date) =>
+    d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  // Helper: month name e.g. "March"
+  const fmtMonth = (d: Date) =>
+    d.toLocaleDateString("en-US", { month: "long" });
+
+  // Helper function to get the number of weeks in current month (Monday-start)
   const getWeeksInCurrentMonth = () => {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
-    const firstWeekDay = firstDay.getDay();
+    // Monday-start: Mon=0, Tue=1, ..., Sun=6
+    const firstWeekDay = (firstDay.getDay() + 6) % 7;
     const totalDays = lastDay.getDate();
     return Math.ceil((firstWeekDay + totalDays) / 7);
   };
 
-  // Helper to get current week boundaries
+  // Helper to get current week boundaries (Monday-start)
   const getCurrentWeekDays = () => {
     const now = new Date();
     const dayOfWeek = now.getDay();
     const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - dayOfWeek);
+    // Monday-start: if Sunday (0), go back 6 days; otherwise go back dayOfWeek-1
+    startOfWeek.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
     startOfWeek.setHours(0, 0, 0, 0);
 
     const days: string[] = [];
@@ -164,32 +190,48 @@ export default function HomeScreen() {
     return { days, startOfWeek };
   };
 
+  // Date range label shown beside each chart title
+  const chartDateRange = useMemo(() => {
+    const now = new Date();
+    if (activeTab === "Daily") {
+      // Current week Mon–Sun
+      const dow = now.getDay();
+      const mon = new Date(now);
+      mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+      mon.setHours(0, 0, 0, 0);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+      return `${fmtShort(mon)} – ${fmtShort(sun)}`;
+    } else if (activeTab === "Weekly") {
+      // Current month start–end
+      const first = new Date(now.getFullYear(), now.getMonth(), 1);
+      const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      return `${fmtShort(first)} – ${fmtShort(last)}`;
+    } else {
+      // Current year Jan–Dec
+      const year = now.getFullYear();
+      return `Jan – Dec ${year}`;
+    }
+  }, [activeTab]);
+
   // Format the analytics based on active tab
   const chartData = useMemo(() => {
     let rawData: Array<{ day: string; sales: number; expense: number }> = [];
-    const { days: weekDays, startOfWeek } = getCurrentWeekDays();
+    const { days: weekDays } = getCurrentWeekDays();
 
     if (activeTab === "Daily") {
       if (!dailyAnalytics) return INCOME_EXPENSE_DATA;
-      // Filter to only current week
-      const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6);
-
-      // Build a lookup from analytics for this week
+      // Backend returns exactly Mon-Sun of current week; map to day name lookup
       const dataMap: Record<string, { sales: number; expense: number }> = {};
-      dailyAnalytics
-        .filter((day: { date: string }) => {
-          const dayDate = new Date(day.date);
-          return dayDate >= startOfWeek && dayDate <= endOfWeek;
-        })
-        .forEach((day: { date: string; income: number; expense: number }) => {
+      dailyAnalytics.forEach(
+        (day: { date: string; income: number; expense: number }) => {
           const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
-            new Date(day.date).getDay()
+            new Date(day.date + "T00:00:00").getDay()
           ];
           dataMap[dayName] = { sales: day.income, expense: day.expense };
-        });
-
-      // Always show all 7 days Sun-Sat with 0 for missing days
+        },
+      );
+      // Show all 7 days Mon-Sun with 0 for missing days
       rawData = weekDays.map((dayName) => ({
         day: dayName,
         sales: dataMap[dayName]?.sales ?? 0,
@@ -266,29 +308,21 @@ export default function HomeScreen() {
   // Format profit data based on active tab
   const profitChartData = useMemo(() => {
     let profits: number[] = [];
-    const { days: weekDays, startOfWeek } = getCurrentWeekDays();
+    const { days: weekDays } = getCurrentWeekDays();
 
     if (activeTab === "Daily") {
       if (!dailyAnalytics) return PROFIT_DATA;
-      // Filter to only current week
-      const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6);
-
-      // Build a lookup for this week
+      // Backend returns exactly Mon-Sun of current week; map to day name lookup
       const dataMap: Record<string, number> = {};
-      dailyAnalytics
-        .filter((day: { date: string }) => {
-          const dayDate = new Date(day.date);
-          return dayDate >= startOfWeek && dayDate <= endOfWeek;
-        })
-        .forEach((day: { date: string; income: number; expense: number }) => {
+      dailyAnalytics.forEach(
+        (day: { date: string; income: number; expense: number }) => {
           const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
-            new Date(day.date).getDay()
+            new Date(day.date + "T00:00:00").getDay()
           ];
           dataMap[dayName] = day.income - day.expense;
-        });
-
-      // Always show all 7 days Sun-Sat with 0 for missing days
+        },
+      );
+      // Show all 7 days Mon-Sun with 0 for missing days
       profits = weekDays.map((dayName) => dataMap[dayName] ?? 0);
     } else if (activeTab === "Weekly") {
       if (!weeklyAnalytics) return PROFIT_DATA;
@@ -338,38 +372,22 @@ export default function HomeScreen() {
 
   // Calculate total profit for different time periods
   const periodProfit = useMemo(() => {
-    const { startOfWeek } = getCurrentWeekDays();
-
     if (activeTab === "Daily") {
-      // Current week profit
-      const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6);
-
+      // Backend returns exactly Mon-Sun of current week
       if (!dailyAnalytics) return 0;
-      return dailyAnalytics
-        .filter((day: { date: string }) => {
-          const dayDate = new Date(day.date);
-          return dayDate >= startOfWeek && dayDate <= endOfWeek;
-        })
-        .reduce(
-          (sum, day: { income: number; expense: number }) =>
-            sum + (day.income - day.expense),
-          0,
-        );
+      return dailyAnalytics.reduce(
+        (sum: number, day: { income: number; expense: number }) =>
+          sum + (day.income - day.expense),
+        0,
+      );
     } else if (activeTab === "Weekly") {
-      // Current month profit
+      // Current month's weeks profit
       if (!weeklyAnalytics) return 0;
-      const now = new Date();
-      const currentMonth = now.getMonth();
-      const currentYear = now.getFullYear();
-
+      const weeksInMonth = getWeeksInCurrentMonth();
       return weeklyAnalytics
-        .filter((_: any, idx: number) => {
-          // Get the week number in the current month context
-          return true; // Just sum all available weekly data for now
-        })
+        .slice(-weeksInMonth)
         .reduce(
-          (sum, week: { income: number; expense: number }) =>
+          (sum: number, week: { income: number; expense: number }) =>
             sum + (week.income - week.expense),
           0,
         );
@@ -377,7 +395,7 @@ export default function HomeScreen() {
       // Monthly - Current year profit
       if (!monthlyAnalytics) return 0;
       return monthlyAnalytics.reduce(
-        (sum, month: { income: number; expense: number }) =>
+        (sum: number, month: { income: number; expense: number }) =>
           sum + (month.income - month.expense),
         0,
       );
@@ -400,10 +418,10 @@ export default function HomeScreen() {
 
   // Get labels for x-axis based on active tab
   const chartLabels = useMemo(() => {
-    const { days: weekDays, startOfWeek } = getCurrentWeekDays();
+    const { days: weekDays } = getCurrentWeekDays();
 
     if (activeTab === "Daily") {
-      // Always show all 7 days Sun-Sat
+      // Always show all 7 days Mon-Sun
       return weekDays;
     } else if (activeTab === "Weekly") {
       const weeksInMonth = getWeeksInCurrentMonth();
@@ -720,8 +738,14 @@ export default function HomeScreen() {
               </View>
               <View>
                 <Text style={styles.highlightLabel}>Top selling product</Text>
-                <Text style={[styles.highlightPeriodLabel, { marginBottom: 2 }]}>
-                  {activeTab === "Daily" ? "this week" : activeTab === "Weekly" ? "this month" : "this year"}
+                <Text
+                  style={[styles.highlightPeriodLabel, { marginBottom: 2 }]}
+                >
+                  {activeTab === "Daily"
+                    ? "this week"
+                    : activeTab === "Weekly"
+                      ? "this month"
+                      : "this year"}
                 </Text>
                 <Text style={styles.highlightValue}>
                   {topProduct?.name
@@ -742,7 +766,11 @@ export default function HomeScreen() {
               <View>
                 <Text style={styles.highlightLabel}>Top selling category</Text>
                 <Text style={styles.highlightPeriodLabel}>
-                  {activeTab === "Daily" ? "this week" : activeTab === "Weekly" ? "this month" : "this year"}
+                  {activeTab === "Daily"
+                    ? "this week"
+                    : activeTab === "Weekly"
+                      ? "this month"
+                      : "this year"}
                 </Text>
                 <Text style={styles.highlightValue}>
                   {topCategory?.name
@@ -922,7 +950,10 @@ export default function HomeScreen() {
           {/* Profit Section */}
           <View style={styles.chartCard}>
             <View style={styles.chartHeader}>
-              <Text style={styles.chartTitle}>Profit</Text>
+              <View>
+                <Text style={styles.chartTitle}>Profit</Text>
+                <Text style={styles.chartDateRange}>{chartDateRange}</Text>
+              </View>
               <View style={styles.chartLegend}>
                 <View style={styles.legendDot} />
                 <Text style={styles.legendText}>Profit</Text>
@@ -1136,7 +1167,10 @@ export default function HomeScreen() {
           {/* Sales & Expenses Section */}
           <View style={styles.chartCard}>
             <View style={styles.chartHeader}>
-              <Text style={styles.chartTitle}>Sales & Expenses</Text>
+              <View>
+                <Text style={styles.chartTitle}>Sales & Expenses</Text>
+                <Text style={styles.chartDateRange}>{chartDateRange}</Text>
+              </View>
               <View style={{ flexDirection: "row", gap: 12 }}>
                 <View style={styles.chartLegend}>
                   <View
@@ -1447,6 +1481,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: COLORS.textDark,
+  },
+  chartDateRange: {
+    fontSize: 10,
+    color: COLORS.primaryBlue,
+    marginTop: 2,
+    fontWeight: "500",
   },
   chartLegend: {
     flexDirection: "row",
