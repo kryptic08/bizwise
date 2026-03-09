@@ -2,7 +2,7 @@
   "expo": {
     "name": "BizWise",
     "slug": "bizwise-expense-manager",
-    "version": "1.4.0",
+    "version": "1.9.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "bizwise",

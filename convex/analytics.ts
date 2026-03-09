@@ -1061,30 +1061,76 @@ export const getDashboardData = query({
     );
     const saleItems = saleItemArrays.flat();
 
-    const productMap = new Map<string, { name: string; count: number }>();
-    const categoryMap = new Map<string, { name: string; count: number }>();
-    for (const item of saleItems) {
-      const p = productMap.get(item.productName);
-      if (p) p.count += item.quantity;
-      else
-        productMap.set(item.productName, {
-          name: item.productName,
-          count: item.quantity,
-        });
-      const c = categoryMap.get(item.category);
-      if (c) c.count += item.quantity;
-      else
-        categoryMap.set(item.category, {
-          name: item.category,
-          count: item.quantity,
-        });
-    }
-    let topProduct = { name: "No Sales Yet", count: 0 };
-    for (const p of productMap.values())
-      if (p.count > topProduct.count) topProduct = p;
-    let topCategory = { name: "No Sales Yet", count: 0 };
-    for (const c of categoryMap.values())
-      if (c.count > topCategory.count) topCategory = c;
+    // ── Period-specific Top Products / Categories ───────────────────────
+    // Helper to compute top product and category from a subset of saleItems
+    const computeTopProductAndCategory = (
+      forSaleIds: Set<string>,
+    ): {
+      topProduct: { name: string; count: number };
+      topCategory: { name: string; count: number };
+    } => {
+      const pm = new Map<string, { name: string; count: number }>();
+      const cm = new Map<string, { name: string; count: number }>();
+      for (const item of saleItems) {
+        if (!forSaleIds.has(String(item.saleId))) continue;
+        const p = pm.get(item.productName);
+        if (p) p.count += item.quantity;
+        else
+          pm.set(item.productName, {
+            name: item.productName,
+            count: item.quantity,
+          });
+        const c = cm.get(item.category);
+        if (c) c.count += item.quantity;
+        else
+          cm.set(item.category, { name: item.category, count: item.quantity });
+      }
+      let tp = { name: "No Sales Yet", count: 0 };
+      for (const p of pm.values()) if (p.count > tp.count) tp = p;
+      let tc = { name: "No Sales Yet", count: 0 };
+      for (const c of cm.values()) if (c.count > tc.count) tc = c;
+      return { topProduct: tp, topCategory: tc };
+    };
+
+    // Weekly (current week: weekStartDate–weekEndDate)
+    const weeklySaleIds = new Set(
+      activeSales
+        .filter(
+          (s) => s.date >= args.weekStartDate && s.date <= args.weekEndDate,
+        )
+        .map((s) => String(s._id)),
+    );
+    const { topProduct: topProductWeekly, topCategory: topCategoryWeekly } =
+      computeTopProductAndCategory(weeklySaleIds);
+
+    // Monthly (current calendar month)
+    const todayD = new Date(args.todayLocalStr + "T00:00:00");
+    const mm = String(todayD.getMonth() + 1).padStart(2, "0");
+    const monthStart = `${todayD.getFullYear()}-${mm}-01`;
+    const lastDayOfMonth = new Date(
+      todayD.getFullYear(),
+      todayD.getMonth() + 1,
+      0,
+    ).getDate();
+    const monthEnd = `${todayD.getFullYear()}-${mm}-${String(lastDayOfMonth).padStart(2, "0")}`;
+    const monthlySaleIds = new Set(
+      activeSales
+        .filter((s) => s.date >= monthStart && s.date <= monthEnd)
+        .map((s) => String(s._id)),
+    );
+    const { topProduct: topProductMonthly, topCategory: topCategoryMonthly } =
+      computeTopProductAndCategory(monthlySaleIds);
+
+    // Yearly (current calendar year)
+    const yearStart = `${todayD.getFullYear()}-01-01`;
+    const yearEnd = `${todayD.getFullYear()}-12-31`;
+    const yearlySaleIds = new Set(
+      activeSales
+        .filter((s) => s.date >= yearStart && s.date <= yearEnd)
+        .map((s) => String(s._id)),
+    );
+    const { topProduct: topProductYearly, topCategory: topCategoryYearly } =
+      computeTopProductAndCategory(yearlySaleIds);
 
     // ── Daily Analytics (Mon–Sun of current week, in-memory) ───────────
     const weekStart = new Date(args.weekStartDate + "T00:00:00");
@@ -1263,8 +1309,12 @@ export const getDashboardData = query({
         productsSold,
         transactionCount: activeSales.length,
       },
-      topProduct,
-      topCategory,
+      topProductWeekly,
+      topCategoryWeekly,
+      topProductMonthly,
+      topCategoryMonthly,
+      topProductYearly,
+      topCategoryYearly,
       dailyAnalytics,
       weeklyAnalytics,
       monthlyAnalytics,

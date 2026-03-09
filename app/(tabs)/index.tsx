@@ -116,9 +116,22 @@ export default function HomeScreen() {
   const dailyAnalytics = dashboardData?.dailyAnalytics;
   const weeklyAnalytics = dashboardData?.weeklyAnalytics;
   const monthlyAnalytics = dashboardData?.monthlyAnalytics;
-  const topProduct = dashboardData?.topProduct;
-  const topCategory = dashboardData?.topCategory;
   const targetProgress = dashboardData?.targetProgress;
+
+  // Pick period-specific top sellers based on active tab
+  // Daily tab → "this week", Weekly tab → "this month", Monthly tab → "this year"
+  const topProduct =
+    activeTab === "Daily"
+      ? dashboardData?.topProductWeekly
+      : activeTab === "Weekly"
+        ? dashboardData?.topProductMonthly
+        : dashboardData?.topProductYearly;
+  const topCategory =
+    activeTab === "Daily"
+      ? dashboardData?.topCategoryWeekly
+      : activeTab === "Weekly"
+        ? dashboardData?.topCategoryMonthly
+        : dashboardData?.topCategoryYearly;
 
   // Check target progress and trigger notifications
   useEffect(() => {
@@ -162,12 +175,13 @@ export default function HomeScreen() {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
-    const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
-    // Monday-start: Mon=0, Tue=1, ..., Sun=6
-    const firstWeekDay = (firstDay.getDay() + 6) % 7;
-    const totalDays = lastDay.getDate();
-    return Math.ceil((firstWeekDay + totalDays) / 7);
+    // Count Mondays in the month — each Monday anchors one business week
+    let mondays = 0;
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+      if (new Date(year, month, d).getDay() === 1) mondays++;
+    }
+    return mondays;
   };
 
   // Helper to get current week boundaries (Monday-start)
@@ -748,13 +762,15 @@ export default function HomeScreen() {
                       : "this year"}
                 </Text>
                 <Text style={styles.highlightValue}>
-                  {topProduct?.name
-                    ? topProduct.name.toLowerCase().includes("add-on") ||
-                      topProduct.name.toLowerCase().includes("takeout") ||
-                      topProduct.name.toLowerCase().includes("fee")
-                      ? "No sales yet"
-                      : toSentenceCase(topProduct.name)
-                    : "No sales yet"}
+                  {periodTotals.sales === 0
+                    ? "No sales yet"
+                    : topProduct?.name
+                      ? topProduct.name.toLowerCase().includes("add-on") ||
+                        topProduct.name.toLowerCase().includes("takeout") ||
+                        topProduct.name.toLowerCase().includes("fee")
+                        ? "No sales yet"
+                        : toSentenceCase(topProduct.name)
+                      : "No sales yet"}
                 </Text>
               </View>
             </View>
@@ -773,13 +789,15 @@ export default function HomeScreen() {
                       : "this year"}
                 </Text>
                 <Text style={styles.highlightValue}>
-                  {topCategory?.name
-                    ? topCategory.name.toLowerCase().includes("add-on") ||
-                      topCategory.name.toLowerCase().includes("takeout") ||
-                      topCategory.name.toLowerCase().includes("fee")
-                      ? "No sales yet"
-                      : toSentenceCase(topCategory.name)
-                    : "No sales yet"}
+                  {periodTotals.sales === 0
+                    ? "No sales yet"
+                    : topCategory?.name
+                      ? topCategory.name.toLowerCase().includes("add-on") ||
+                        topCategory.name.toLowerCase().includes("takeout") ||
+                        topCategory.name.toLowerCase().includes("fee")
+                        ? "No sales yet"
+                        : toSentenceCase(topCategory.name)
+                      : "No sales yet"}
                 </Text>
               </View>
             </View>

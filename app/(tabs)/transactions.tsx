@@ -3,7 +3,7 @@ import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
 import { useMutation } from "convex/react";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import {
   ArrowDownRight,
   ArrowLeft,
@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react-native";
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -113,14 +113,34 @@ export default function TransactionScreen() {
   };
 
   // Date filter state - default to today
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const makeToday = () => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+  const makeTomorrow = (from: Date) => {
+    const d = new Date(from);
+    d.setDate(d.getDate() + 1);
+    return d;
+  };
 
-  const [startDate, setStartDate] = useState<Date>(today); // Default to today
-  const [endDate, setEndDate] = useState<Date>(tomorrow);
+  const [startDate, setStartDate] = useState<Date>(makeToday);
+  const [endDate, setEndDate] = useState<Date>(() => makeTomorrow(makeToday()));
   const [isAllTime, setIsAllTime] = useState(false);
+  // Track whether user has set a custom filter; if not, refresh to today on focus
+  const [hasCustomFilter, setHasCustomFilter] = useState(false);
+
+  // Refresh "today" filter when tab gains focus so dates never go stale
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasCustomFilter) {
+        const t = makeToday();
+        setStartDate(t);
+        setEndDate(makeTomorrow(t));
+        setIsAllTime(false);
+      }
+    }, [hasCustomFilter]),
+  );
   const [showDateFilter, setShowDateFilter] = useState(false);
   // Which date is currently being picked: null = none, "start" = from, "end" = to
   const [activePicker, setActivePicker] = useState<"start" | "end" | null>(
@@ -237,6 +257,7 @@ export default function TransactionScreen() {
         setStartDate(now);
         setEndDate(tomorrow);
         setIsAllTime(false);
+        setHasCustomFilter(false);
         break;
       case "yesterday":
         const yesterday = new Date(now);
@@ -244,6 +265,7 @@ export default function TransactionScreen() {
         setStartDate(yesterday);
         setEndDate(now);
         setIsAllTime(false);
+        setHasCustomFilter(true);
         break;
       case "week":
         const weekStart = new Date(now);
@@ -251,6 +273,7 @@ export default function TransactionScreen() {
         setStartDate(weekStart);
         setEndDate(tomorrow);
         setIsAllTime(false);
+        setHasCustomFilter(true);
         break;
       case "month":
         const monthStart = new Date(now);
@@ -258,6 +281,7 @@ export default function TransactionScreen() {
         setStartDate(monthStart);
         setEndDate(tomorrow);
         setIsAllTime(false);
+        setHasCustomFilter(true);
         break;
       case "all":
         // Use actual data range: oldest → newest transaction date
@@ -279,10 +303,11 @@ export default function TransactionScreen() {
             setEndDate(maxDate);
           } else {
             setStartDate(new Date(2020, 0, 1));
-            setEndDate(new Date(today.getTime() + 86400000));
+            setEndDate(new Date(now.getTime() + 86400000));
           }
           setIsAllTime(true);
         }
+        setHasCustomFilter(true);
         break;
     }
     setActivePicker(null);

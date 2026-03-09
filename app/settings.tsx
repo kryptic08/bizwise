@@ -73,7 +73,7 @@ export default function SettingsScreen() {
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
-        <View style={styles.helpIconBg} />
+        <View style={{ width: 24 }} />
       </View>
 
       <View style={styles.content}>
@@ -120,14 +120,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: COLORS.white,
   },
-  helpIconBg: {
-    backgroundColor: COLORS.white,
-    borderRadius: 15,
-    width: 26,
-    height: 26,
-    justifyContent: "center",
-    alignItems: "center",
-  },
+
   content: {
     flex: 1,
     backgroundColor: COLORS.lightBlueBg,
