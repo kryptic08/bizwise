@@ -86,8 +86,16 @@ const AI_DEBOUNCE_MS = 1500;
 const AI_RATE_LIMIT_MS = 3000;
 /** minimum title length before consulting AI */
 const AI_MIN_TITLE_LENGTH = 4;
-/** cheapest model — used ONLY for single-item classification (~10 tokens out) */
-const AI_CATEGORY_MODEL = "gemini-flash-lite-latest";
+/** Fallback models to try for categorization (in order of preference) */
+const AI_CATEGORY_MODELS = [
+  "gemini-flash-lite-latest",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash",
+  "gemini-flash-latest",
+  "gemini-2.5-flash",
+];
+/** Timeout for AI categorization requests (ms) */
+const AI_CATEGORY_TIMEOUT_MS = 10000;
 
 /**
  * Check if text contains explicit General terms (misc, other, etc.)
@@ -332,17 +340,25 @@ export default function AddExpenseScreen() {
    * classify a single expense title. Only fires when the local keyword engine
    * returned "General". Results are cached in-memory so the same title never
    * triggers a second network call within a session.
+   *
+   * Includes model fallback cycling and robust error handling to prevent
+   * stuck loading states.
    */
   const fetchAICategoryForItem = async (id: string, title: string) => {
     const trimmed = title.trim();
-    if (trimmed.length < AI_MIN_TITLE_LENGTH) return;
+    if (trimmed.length < AI_MIN_TITLE_LENGTH) {
+      console.log(`[AI Category] Title too short: "${trimmed}"`);
+      return;
+    }
 
     const businessType = user?.businessType;
     const cacheKey = `${businessType ?? "general"}::${trimmed.toLowerCase()}`;
+    console.log(`[AI Category] 🤖 Starting categorization for "${trimmed}"`);
 
     // 1. Serve from in-memory cache (free, instant)
     if (aiCategoryCache.current.has(cacheKey)) {
       const cached = aiCategoryCache.current.get(cacheKey)!;
+      console.log(`[AI Category] ✓ Cache hit: "${cached}"`);
       setExpenses((prev) =>
         prev.map((item) =>
           item.id === id && item.categorySource !== "user"
@@ -363,6 +379,7 @@ export default function AddExpenseScreen() {
     const elapsed = now - lastAICallTimestamp.current;
     if (elapsed < AI_RATE_LIMIT_MS) {
       const retry = AI_RATE_LIMIT_MS - elapsed;
+      console.log(`[AI Category] Rate limited, retrying in ${retry}ms`);
       const timer = setTimeout(() => fetchAICategoryForItem(id, title), retry);
       categorizationTimers.current.set(id, timer);
       return;
@@ -371,6 +388,15 @@ export default function AddExpenseScreen() {
     // 3. Mark item as loading and fire the call
     setCategorizingIds((prev) => new Set(prev).add(id));
     lastAICallTimestamp.current = Date.now();
+
+    // Helper to clear loading state
+    const clearLoadingState = () => {
+      setCategorizingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    };
 
     try {
       const categories = getCategoriesForBusinessType(businessType);
@@ -384,53 +410,109 @@ export default function AddExpenseScreen() {
         `${categories.join(", ")}\n\n` +
         `Reply with ONLY the exact category name from the list. No explanations.`;
 
-      const apiKey =
-        GEMINI_CATEGORY_KEYS[
-          geminiCategoryKeyIndex % GEMINI_CATEGORY_KEYS.length
-        ];
-      geminiCategoryKeyIndex =
-        (geminiCategoryKeyIndex + 1) % GEMINI_CATEGORY_KEYS.length;
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${AI_CATEGORY_MODEL}:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { maxOutputTokens: 15, temperature: 0 },
-          }),
-        },
-      );
-
-      if (!response.ok) return;
-
-      const data = await response.json();
-      const raw: string =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-
-      // Validate: response must exactly match one of the allowed categories
-      const matched = categories.find(
-        (c) => c.toLowerCase() === raw.toLowerCase(),
-      );
-
-      if (matched && matched !== "General") {
-        aiCategoryCache.current.set(cacheKey, matched);
-        setExpenses((prev) =>
-          prev.map((item) =>
-            item.id === id && item.categorySource !== "user"
-              ? { ...item, category: matched, categorySource: "ai" }
-              : item,
-          ),
+      // Try each model in sequence until one succeeds
+      let lastError: any = null;
+      for (
+        let modelIndex = 0;
+        modelIndex < AI_CATEGORY_MODELS.length;
+        modelIndex++
+      ) {
+        const model = AI_CATEGORY_MODELS[modelIndex];
+        console.log(
+          `[AI Category] Trying model ${modelIndex + 1}/${AI_CATEGORY_MODELS.length}: ${model}`,
         );
+
+        try {
+          const apiKey =
+            GEMINI_CATEGORY_KEYS[
+              geminiCategoryKeyIndex % GEMINI_CATEGORY_KEYS.length
+            ];
+          geminiCategoryKeyIndex =
+            (geminiCategoryKeyIndex + 1) % GEMINI_CATEGORY_KEYS.length;
+
+          // Create fetch with timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(
+            () => controller.abort(),
+            AI_CATEGORY_TIMEOUT_MS,
+          );
+
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { maxOutputTokens: 15, temperature: 0 },
+              }),
+              signal: controller.signal,
+            },
+          );
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.warn(
+              `[AI Category] Model ${model} HTTP ${response.status}:`,
+              errorText,
+            );
+            lastError = new Error(`HTTP ${response.status}: ${errorText}`);
+            continue; // Try next model
+          }
+
+          const data = await response.json();
+          const raw: string =
+            data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+
+          console.log(`[AI Category] Model ${model} raw response: "${raw}"`);
+
+          // Validate: response must exactly match one of the allowed categories
+          const matched = categories.find(
+            (c) => c.toLowerCase() === raw.toLowerCase(),
+          );
+
+          if (matched && matched !== "General") {
+            console.log(`[AI Category] ✓ SUCCESS with ${model}: "${matched}"`);
+            aiCategoryCache.current.set(cacheKey, matched);
+            setExpenses((prev) =>
+              prev.map((item) =>
+                item.id === id && item.categorySource !== "user"
+                  ? { ...item, category: matched, categorySource: "ai" }
+                  : item,
+              ),
+            );
+            clearLoadingState();
+            return; // Success! Exit function
+          } else {
+            console.warn(
+              `[AI Category] Model ${model} returned invalid/General category: "${raw}"`,
+            );
+            lastError = new Error(`Invalid category response: ${raw}`);
+            continue; // Try next model
+          }
+        } catch (modelError: any) {
+          console.warn(
+            `[AI Category] Model ${model} error:`,
+            modelError.message,
+          );
+          lastError = modelError;
+          continue; // Try next model
+        }
       }
-    } catch (err) {
-      console.warn("[AI Category] fetch error:", err);
+
+      // All models failed
+      console.error(
+        `[AI Category] ✗ All ${AI_CATEGORY_MODELS.length} models failed for "${trimmed}"`,
+        lastError,
+      );
+    } catch (err: any) {
+      console.error("[AI Category] ✗ Fatal error:", err.message);
     } finally {
-      setCategorizingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
+      // ALWAYS clear loading state, even if all models fail
+      clearLoadingState();
+      console.log(`[AI Category] Loading state cleared for "${trimmed}"`);
     }
   };
 
@@ -487,9 +569,13 @@ export default function AddExpenseScreen() {
             trimmed,
             user?.businessType,
           );
+          console.log(
+            `[Add Expense] Local categorization: "${localCategory}" | Explicit General: ${isExplicitGeneralTerm(trimmed)}`,
+          );
           // Trigger AI only if no match found AND not an explicit General term
           shouldTriggerAI =
             localCategory === "General" && !isExplicitGeneralTerm(trimmed);
+          console.log(`[Add Expense] Should trigger AI: ${shouldTriggerAI}`);
         }
 
         // If AI won't fire, cancel any pending timer and clear the spinner
@@ -544,9 +630,15 @@ export default function AddExpenseScreen() {
                 user?.businessType,
               );
               const isExplicitGeneral = isExplicitGeneralTerm(trimmed);
+              console.log(
+                `[Add Expense] Title "${trimmed}" → Category: "${localCategory}" | Explicit General: ${isExplicitGeneral}`,
+              );
 
               if (localCategory !== "General" || isExplicitGeneral) {
                 // Solid local match (specific category or explicit General term)
+                console.log(
+                  `[Add Expense] ✓ Using local category: "${localCategory}"`,
+                );
                 updated.category = localCategory;
                 updated.categorySource = "local";
               } else if (item.categorySource !== "user") {

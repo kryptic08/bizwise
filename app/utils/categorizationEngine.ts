@@ -2234,6 +2234,9 @@ export function categorizeItemForBusiness(
   businessType?: BusinessType | string | null,
 ): string {
   const lower = itemTitle.toLowerCase();
+  console.log(
+    `[Categorization] Item: "${itemTitle}" | Business: ${businessType || "None"}`,
+  );
 
   // ── Step 0: Catch explicit "General" items first (highest priority) ──────
   // Items that should ALWAYS be General, regardless of other keywords
@@ -2247,6 +2250,9 @@ export function categorizeItemForBusiness(
     "sundry",
   ];
   if (generalTerms.some((term) => containsWholeWord(lower, term))) {
+    console.log(
+      `[Categorization] ✓ Step 0: Explicit General term detected → "General"`,
+    );
     return "General";
   }
 
@@ -2256,6 +2262,9 @@ export function categorizeItemForBusiness(
     if (db) {
       for (const [phrase, category] of Object.entries(db)) {
         if (lower.includes(phrase.toLowerCase())) {
+          console.log(
+            `[Categorization] ✓ Step 1: Product DB match "${phrase}" → "${category}"`,
+          );
           return category;
         }
       }
@@ -2268,6 +2277,9 @@ export function categorizeItemForBusiness(
     case "Food Business": {
       // Food items → Raw Materials (they are cooked/processed)
       if (containsAnyWholeWord(lower, FOOD_RAW_MATERIAL_KEYWORDS)) {
+        console.log(
+          `[Categorization] ✓ Step 2: Food Business keyword match → "Raw Materials"`,
+        );
         return "Raw Materials";
       }
       break;
@@ -2277,6 +2289,9 @@ export function categorizeItemForBusiness(
     case "Meat Shop": {
       // Meat products → Merchandise Inventory (sold directly)
       if (containsAnyWholeWord(lower, MERCHANDISE_KEYWORDS)) {
+        console.log(
+          `[Categorization] ✓ Step 2: Meat Shop keyword match → "Merchandise Inventory"`,
+        );
         return "Merchandise Inventory";
       }
       // Ice, sawdust, hooks etc. are store supplies for a meat shop
@@ -2289,6 +2304,9 @@ export function categorizeItemForBusiness(
           "container",
         ])
       ) {
+        console.log(
+          `[Categorization] ✓ Step 2: Meat Shop supplies match → "Store Supplies"`,
+        );
         return "Store Supplies";
       }
       break;
@@ -2299,6 +2317,9 @@ export function categorizeItemForBusiness(
     case "Printing Business": {
       // Only printing materials → Raw Materials (NOT food items)
       if (containsAnyWholeWord(lower, PRINTING_RAW_MATERIAL_KEYWORDS)) {
+        console.log(
+          `[Categorization] ✓ Step 2: Printing Business keyword match → "Raw Materials"`,
+        );
         return "Raw Materials";
       }
       break;
@@ -2615,10 +2636,16 @@ export function categorizeItemForBusiness(
   // ── Base keyword fallback (shared across all business types) ────────────
   for (const [category, keywords] of Object.entries(BASE_KEYWORDS)) {
     if (containsAnyWholeWord(lower, keywords)) {
+      console.log(
+        `[Categorization] ✓ Step 3: Base keyword match → "${category}"`,
+      );
       return category;
     }
   }
 
+  console.log(
+    `[Categorization] ✗ No match found → "General" (AI will be triggered)`,
+  );
   return "General";
 }
 
