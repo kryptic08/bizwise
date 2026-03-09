@@ -184,17 +184,24 @@ export function useDashboardData(
   todayLocalStr: string,
   weekStartDate: string,
   weekEndDate: string,
+  weeksCount?: number,
 ) {
   const live = useQuery(
     api.analytics.getDashboardData,
     userId
-      ? { userId: userId as UserId, todayLocalStr, weekStartDate, weekEndDate }
+      ? {
+          userId: userId as UserId,
+          todayLocalStr,
+          weekStartDate,
+          weekEndDate,
+          ...(weeksCount ? { weeksCount } : {}),
+        }
       : "skip",
   );
   return useOfflineCached(
     live,
     userId
-      ? `dashboard_data_${userId}_${todayLocalStr}_${weekStartDate}_${weekEndDate}`
+      ? `dashboard_data_${userId}_${todayLocalStr}_${weekStartDate}_${weekEndDate}_${weeksCount ?? 7}`
       : undefined,
   );
 }

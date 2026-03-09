@@ -106,12 +106,44 @@ export default function HomeScreen() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }, []);
 
+  // Calculate how many weeks to fetch to cover entire current month
+  const weeksToFetch = useMemo(() => {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    // Find the Monday on or before the start of the month
+    const startDow = startOfMonth.getDay();
+    const firstMonday = new Date(startOfMonth);
+    if (startDow === 0) {
+      // Sunday - go back 6 days to previous Monday
+      firstMonday.setDate(startOfMonth.getDate() - 6);
+    } else if (startDow !== 1) {
+      // Not Monday - find next Monday
+      firstMonday.setDate(startOfMonth.getDate() + (8 - startDow));
+    }
+
+    // Count weeks from first Monday in/after month start to end of month
+    const daysDiff = Math.floor(
+      (endOfMonth.getTime() - firstMonday.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    const weeksInMonth = Math.ceil(daysDiff / 7) + 1;
+
+    // Calculate how far back from today we need to fetch
+    const todayToFirstMonday = Math.floor(
+      (now.getTime() - firstMonday.getTime()) / (1000 * 60 * 60 * 24),
+    );
+
+    return Math.max(Math.ceil(todayToFirstMonday / 7) + 1, weeksInMonth);
+  }, []);
+
   // Single combined query replaces 7 separate subscriptions (~80% bandwidth reduction)
   const { data: dashboardData } = useDashboardData(
     user?.userId,
     todayLocalStr,
     currentWeekStartStr,
     currentWeekEndStr,
+    weeksToFetch,
   );
   const dailyAnalytics = dashboardData?.dailyAnalytics;
   const weeklyAnalytics = dashboardData?.weeklyAnalytics;
@@ -254,13 +286,31 @@ export default function HomeScreen() {
     } else if (activeTab === "Weekly") {
       if (!weeklyAnalytics) return INCOME_EXPENSE_DATA;
       const weeksInMonth = getWeeksInCurrentMonth();
-      rawData = weeklyAnalytics
-        .slice(-weeksInMonth)
-        .map((week: { income: number; expense: number }, index: number) => ({
-          day: `W${index + 1}`,
-          sales: week.income,
-          expense: week.expense,
-        }));
+
+      // Filter weeks that START in the current month only
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+
+      const currentMonthWeeks = weeklyAnalytics.filter(
+        (week: { weekStart: string; income: number; expense: number }) => {
+          const weekStartDate = new Date(week.weekStart + "T00:00:00");
+          return (
+            weekStartDate.getFullYear() === currentYear &&
+            weekStartDate.getMonth() === currentMonth
+          );
+        },
+      );
+
+      // Build complete week array with all weeks in month (fill zeros for missing weeks)
+      rawData = Array.from({ length: weeksInMonth }, (_, i) => {
+        const weekData = currentMonthWeeks[i];
+        return {
+          day: `W${i + 1}`,
+          sales: weekData?.income ?? 0,
+          expense: weekData?.expense ?? 0,
+        };
+      });
     } else {
       // Monthly - show all 12 months
       if (!monthlyAnalytics) return INCOME_EXPENSE_DATA.slice(0, 6);
@@ -341,12 +391,27 @@ export default function HomeScreen() {
     } else if (activeTab === "Weekly") {
       if (!weeklyAnalytics) return PROFIT_DATA;
       const weeksInMonth = getWeeksInCurrentMonth();
-      profits = weeklyAnalytics
-        .slice(-weeksInMonth)
-        .map(
-          (week: { income: number; expense: number }) =>
-            week.income - week.expense,
-        );
+
+      // Filter weeks that START in the current month only
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+
+      const currentMonthWeeks = weeklyAnalytics.filter(
+        (week: { weekStart: string; income: number; expense: number }) => {
+          const weekStartDate = new Date(week.weekStart + "T00:00:00");
+          return (
+            weekStartDate.getFullYear() === currentYear &&
+            weekStartDate.getMonth() === currentMonth
+          );
+        },
+      );
+
+      // Build complete week array with all weeks in month (fill zeros for missing weeks)
+      profits = Array.from({ length: weeksInMonth }, (_, i) => {
+        const weekData = currentMonthWeeks[i];
+        return weekData ? weekData.income - weekData.expense : 0;
+      });
     } else {
       // Monthly - show all 12 months
       if (!monthlyAnalytics) return PROFIT_DATA.slice(0, 6);
@@ -397,14 +462,27 @@ export default function HomeScreen() {
     } else if (activeTab === "Weekly") {
       // Current month's weeks profit
       if (!weeklyAnalytics) return 0;
-      const weeksInMonth = getWeeksInCurrentMonth();
-      return weeklyAnalytics
-        .slice(-weeksInMonth)
-        .reduce(
-          (sum: number, week: { income: number; expense: number }) =>
-            sum + (week.income - week.expense),
-          0,
-        );
+
+      // Filter weeks that START in the current month only
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+
+      const currentMonthWeeks = weeklyAnalytics.filter(
+        (week: { weekStart: string; income: number; expense: number }) => {
+          const weekStartDate = new Date(week.weekStart + "T00:00:00");
+          return (
+            weekStartDate.getFullYear() === currentYear &&
+            weekStartDate.getMonth() === currentMonth
+          );
+        },
+      );
+
+      return currentMonthWeeks.reduce(
+        (sum: number, week: { income: number; expense: number }) =>
+          sum + (week.income - week.expense),
+        0,
+      );
     } else {
       // Monthly - Current year profit
       if (!monthlyAnalytics) return 0;

@@ -449,77 +449,22 @@ const BASE_KEYWORDS: KeywordMap = {
     "aircon service",
     "refrigerator service",
   ],
-  "Licenses & Permits": [
-    "license",
-    "permit",
-    "permits",
-    "licensing",
-    "registration",
-    "business permit",
-    "mayor permit",
-    "barangay permit",
-    "dti",
-    "sec",
-    "bir",
-    "tin",
-    "certificate",
-    "clearance",
-    "accreditation",
-    "renewal",
-    "compliance",
-    "legal fee",
-    "attorney",
-    "lawyer",
-    "notary",
-    "doc stamp",
-    " Documentary stamp",
-  ],
-  Insurance: [
-    "insurance",
-    "premium",
-    "insurance premium",
-    "coverage",
-    "policy",
-    "health insurance",
-    "life insurance",
-    "business insurance",
-    "property insurance",
-    "vehicle insurance",
-    "car insurance",
-    "microinsurance",
-    "marine insurance",
-    "claim",
-    "insured",
-  ],
-  "Bank Charges": [
-    "bank",
-    "banking",
-    "bank charge",
-    "service charge",
-    "fee",
-    "charges",
-    "maintenance fee",
-    "ledger fee",
-    "dormancy fee",
-    "transfer fee",
-    "remittance",
-    "wire fee",
-    "interest",
-    "interest rate",
-    "loan",
-    "loan payment",
-    "credit",
-    "credit card",
-    "installment",
-    "atm fee",
+  General: [
+    "misc",
+    "miscellaneous",
+    "misc fee",
+    "miscellaneous fee",
+    "other",
+    "others",
+    "sundry",
+    "various",
   ],
 };
 
 /**
- * Keywords for "Raw Materials" — used in food/printing businesses where
- * items like chicken, oil, flour are inputs to production.
+ * Keywords for "Raw Materials" in FOOD businesses — ingredients used in cooking/production
  */
-const RAW_MATERIAL_KEYWORDS: string[] = [
+const FOOD_RAW_MATERIAL_KEYWORDS: string[] = [
   "raw",
   "material",
   "ingredient",
@@ -550,14 +495,6 @@ const RAW_MATERIAL_KEYWORDS: string[] = [
   "wheat",
   "corn",
   "beans",
-  "ink",
-  "toner",
-  "paper",
-  "substrate",
-  "vinyl",
-  "tarpaulin",
-  "canvas",
-  "laminate",
   // Bakery specific
   "yeast",
   "baking powder",
@@ -598,6 +535,31 @@ const RAW_MATERIAL_KEYWORDS: string[] = [
   "ice cream",
   "vanilla ice cream",
   "chocolate ice cream",
+];
+
+/**
+ * Keywords for "Raw Materials" in PRINTING businesses — supplies used in printing
+ */
+const PRINTING_RAW_MATERIAL_KEYWORDS: string[] = [
+  "raw",
+  "material",
+  "ink",
+  "toner",
+  "paper",
+  "substrate",
+  "vinyl",
+  "tarpaulin",
+  "canvas",
+  "laminate",
+  "bond paper",
+  "photo paper",
+  "sticker paper",
+  "cardboard",
+  "cartridge",
+  "ribbon",
+  "coating",
+  "varnish",
+  "adhesive",
 ];
 
 /**
@@ -666,6 +628,28 @@ const CONSTRUCTION_MATERIAL_KEYWORDS: string[] = [
   "adhesive",
   "mortar",
 ];
+
+// ── Word Boundary Matching Helper ───────────────────────────────────────────
+
+/**
+ * Checks if a keyword exists as a whole word in the text.
+ * Prevents false matches like "car" in "carrot" or "rice" in "price".
+ * Uses word boundaries to match complete words only.
+ */
+function containsWholeWord(text: string, keyword: string): boolean {
+  // Escape special regex characters in the keyword
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match as whole word with word boundaries
+  const regex = new RegExp(`\\b${escaped}\\b`, "i");
+  return regex.test(text);
+}
+
+/**
+ * Checks if any keyword from an array exists as a whole word in the text.
+ */
+function containsAnyWholeWord(text: string, keywords: string[]): boolean {
+  return keywords.some((kw) => containsWholeWord(text, kw));
+}
 
 // ── Product Name Database ────────────────────────────────────────────────────
 //
@@ -2251,6 +2235,21 @@ export function categorizeItemForBusiness(
 ): string {
   const lower = itemTitle.toLowerCase();
 
+  // ── Step 0: Catch explicit "General" items first (highest priority) ──────
+  // Items that should ALWAYS be General, regardless of other keywords
+  const generalTerms = [
+    "misc",
+    "miscellaneous",
+    "misc fee",
+    "miscellaneous fee",
+    "other",
+    "others",
+    "sundry",
+  ];
+  if (generalTerms.some((term) => containsWholeWord(lower, term))) {
+    return "General";
+  }
+
   // ── Step 1: Product name database lookup (highest priority) ─────────────
   if (businessType) {
     const db = PRODUCT_NAME_DATABASE[businessType as string];
@@ -2268,7 +2267,7 @@ export function categorizeItemForBusiness(
     // ── Food Business ────────────────────────────────────────────────────
     case "Food Business": {
       // Food items → Raw Materials (they are cooked/processed)
-      if (RAW_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, FOOD_RAW_MATERIAL_KEYWORDS)) {
         return "Raw Materials";
       }
       break;
@@ -2277,23 +2276,29 @@ export function categorizeItemForBusiness(
     // ── Meat Shop ────────────────────────────────────────────────────────
     case "Meat Shop": {
       // Meat products → Merchandise Inventory (sold directly)
-      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, MERCHANDISE_KEYWORDS)) {
         return "Merchandise Inventory";
       }
       // Ice, sawdust, hooks etc. are store supplies for a meat shop
       if (
-        ["ice", "sawdust", "hook", "tray", "container"].some((kw) =>
-          lower.includes(kw),
-        )
+        containsAnyWholeWord(lower, [
+          "ice",
+          "sawdust",
+          "hook",
+          "tray",
+          "container",
+        ])
       ) {
         return "Store Supplies";
       }
       break;
     }
 
-    // ── Printing Services ────────────────────────────────────────────────
-    case "Printing Services": {
-      if (RAW_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+    // ── Printing Services / Printing Business ────────────────────────────
+    case "Printing Services":
+    case "Printing Business": {
+      // Only printing materials → Raw Materials (NOT food items)
+      if (containsAnyWholeWord(lower, PRINTING_RAW_MATERIAL_KEYWORDS)) {
         return "Raw Materials";
       }
       break;
@@ -2301,18 +2306,18 @@ export function categorizeItemForBusiness(
 
     // ── Construction ─────────────────────────────────────────────────────
     case "Construction": {
-      if (CONSTRUCTION_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, CONSTRUCTION_MATERIAL_KEYWORDS)) {
         return "Construction Materials";
       }
       if (
-        [
+        containsAnyWholeWord(lower, [
           "labor",
           "worker",
           "contractor",
           "subcontractor",
           "skilled",
           "artisan",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Labor & Subcontracting";
       }
@@ -2321,7 +2326,7 @@ export function categorizeItemForBusiness(
 
     // ── Retail ───────────────────────────────────────────────────────────
     case "Retail": {
-      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, MERCHANDISE_KEYWORDS)) {
         return "Merchandise Inventory";
       }
       break;
@@ -2330,18 +2335,18 @@ export function categorizeItemForBusiness(
     // ── Water Station ─────────────────────────────────────────────────
     case "Water Station": {
       if (
-        [
+        containsAnyWholeWord(lower, [
           "water",
           "distilled",
           "refill",
           "gallon",
           "container",
           "dispenser",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Water Supplies";
       }
-      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, MERCHANDISE_KEYWORDS)) {
         return "Gallon/Container Inventory";
       }
       break;
@@ -2350,14 +2355,14 @@ export function categorizeItemForBusiness(
     // ── Laundry Shop ──────────────────────────────────────────────────
     case "Laundry Shop": {
       if (
-        [
+        containsAnyWholeWord(lower, [
           "detergent",
           "bleach",
           "fabric conditioner",
           "softener",
           "soap",
           "laundry",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Detergents & Chemicals";
       }
@@ -2366,13 +2371,11 @@ export function categorizeItemForBusiness(
 
     // ── Internet Cafe ───────────────────────────────────────────────────
     case "Internet Cafe": {
-      if (
-        ["internet", "wifi", "load", "data"].some((kw) => lower.includes(kw))
-      ) {
+      if (containsAnyWholeWord(lower, ["internet", "wifi", "load", "data"])) {
         return "Internet Services";
       }
       if (
-        [
+        containsAnyWholeWord(lower, [
           "computer",
           "pc",
           "laptop",
@@ -2381,7 +2384,7 @@ export function categorizeItemForBusiness(
           "keyboard",
           "mouse",
           "headset",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Computer Equipment";
       }
@@ -2391,7 +2394,7 @@ export function categorizeItemForBusiness(
     // ── Beauty Salon ───────────────────────────────────────────────────
     case "Beauty Salon": {
       if (
-        [
+        containsAnyWholeWord(lower, [
           "shampoo",
           "conditioner",
           "hair dye",
@@ -2403,7 +2406,7 @@ export function categorizeItemForBusiness(
           "wax",
           "pomade",
           "hair spray",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Hair & Beauty Products";
       }
@@ -2413,7 +2416,7 @@ export function categorizeItemForBusiness(
     // ── Repair Shop ───────────────────────────────────────────────────
     case "Repair Shop": {
       if (
-        [
+        containsAnyWholeWord(lower, [
           "part",
           "component",
           "spare",
@@ -2422,14 +2425,18 @@ export function categorizeItemForBusiness(
           "battery",
           "charger",
           "cable",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Parts & Components";
       }
       if (
-        ["tool", "solder", "multimeter", "screwdriver", "wrench"].some((kw) =>
-          lower.includes(kw),
-        )
+        containsAnyWholeWord(lower, [
+          "tool",
+          "solder",
+          "multimeter",
+          "screwdriver",
+          "wrench",
+        ])
       ) {
         return "Tools";
       }
@@ -2470,7 +2477,7 @@ export function categorizeItemForBusiness(
 
     // ── Convenience Store ─────────────────────────────────────────────
     case "Convenience Store": {
-      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, MERCHANDISE_KEYWORDS)) {
         return "Merchandise Inventory";
       }
       break;
@@ -2478,11 +2485,11 @@ export function categorizeItemForBusiness(
 
     // ── Hardware ──────────────────────────────────────────────────────
     case "Hardware": {
-      if (CONSTRUCTION_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, CONSTRUCTION_MATERIAL_KEYWORDS)) {
         return "Hardware Inventory";
       }
       if (
-        [
+        containsAnyWholeWord(lower, [
           "tool",
           "hammer",
           "saw",
@@ -2490,7 +2497,7 @@ export function categorizeItemForBusiness(
           "wrench",
           "screwdriver",
           "plier",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Hardware Inventory";
       }
@@ -2500,7 +2507,7 @@ export function categorizeItemForBusiness(
     // ── Computer Shop ───────────────────────────────────────────────────
     case "Computer Shop": {
       if (
-        [
+        containsAnyWholeWord(lower, [
           "cpu",
           "processor",
           "motherboard",
@@ -2512,12 +2519,12 @@ export function categorizeItemForBusiness(
           "psu",
           "case",
           "fan",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Computer Parts";
       }
       if (
-        [
+        containsAnyWholeWord(lower, [
           "mouse",
           "keyboard",
           "headset",
@@ -2526,7 +2533,7 @@ export function categorizeItemForBusiness(
           "speaker",
           "cable",
           "adapter",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Accessories";
       }
@@ -2536,7 +2543,7 @@ export function categorizeItemForBusiness(
     // ── Mobile Shop ───────────────────────────────────────────────────
     case "Mobile Shop": {
       if (
-        [
+        containsAnyWholeWord(lower, [
           "phone",
           "smartphone",
           "tablet",
@@ -2547,12 +2554,12 @@ export function categorizeItemForBusiness(
           "oppo",
           "realme",
           "xiaomi",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Phone & Gadgets";
       }
       if (
-        [
+        containsAnyWholeWord(lower, [
           "case",
           "charger",
           "cable",
@@ -2560,7 +2567,7 @@ export function categorizeItemForBusiness(
           "earphone",
           "powerbank",
           "screen protector",
-        ].some((kw) => lower.includes(kw))
+        ])
       ) {
         return "Accessories";
       }
@@ -2569,7 +2576,7 @@ export function categorizeItemForBusiness(
 
     // ── Bakery ────────────────────────────────────────────────────────
     case "Bakery": {
-      if (RAW_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, FOOD_RAW_MATERIAL_KEYWORDS)) {
         return "Raw Materials";
       }
       break;
@@ -2577,7 +2584,7 @@ export function categorizeItemForBusiness(
 
     // ── Coffee Shop ───────────────────────────────────────────────────
     case "Coffee Shop": {
-      if (RAW_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, FOOD_RAW_MATERIAL_KEYWORDS)) {
         return "Raw Materials";
       }
       break;
@@ -2585,18 +2592,21 @@ export function categorizeItemForBusiness(
 
     // ── Sari-Sari Store ────────────────────────────────────────────────
     case "Sari-Sari Store": {
-      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, MERCHANDISE_KEYWORDS)) {
         return "Merchandise Inventory";
       }
       break;
     }
 
     default:
-      // "Others" — try raw materials first, then merchandise
-      if (RAW_MATERIAL_KEYWORDS.some((kw) => lower.includes(kw))) {
+      // "Others" — try food/printing raw materials first, then merchandise
+      if (containsAnyWholeWord(lower, FOOD_RAW_MATERIAL_KEYWORDS)) {
         return "Raw Materials";
       }
-      if (MERCHANDISE_KEYWORDS.some((kw) => lower.includes(kw))) {
+      if (containsAnyWholeWord(lower, PRINTING_RAW_MATERIAL_KEYWORDS)) {
+        return "Raw Materials";
+      }
+      if (containsAnyWholeWord(lower, MERCHANDISE_KEYWORDS)) {
         return "Merchandise Inventory";
       }
       break;
@@ -2604,7 +2614,7 @@ export function categorizeItemForBusiness(
 
   // ── Base keyword fallback (shared across all business types) ────────────
   for (const [category, keywords] of Object.entries(BASE_KEYWORDS)) {
-    if (keywords.some((kw) => lower.includes(kw))) {
+    if (containsAnyWholeWord(lower, keywords)) {
       return category;
     }
   }
@@ -2625,9 +2635,22 @@ export function getBusinessTypePromptContext(
   const categoryList = categories.join(", ");
 
   const baseIntro = `The user's business type is: "${businessType || "General Business"}".
-Available categories for this business: ${categoryList}
+
+⚠️ STRICT CATEGORY ENFORCEMENT ⚠️
+YOU MUST ONLY USE THESE EXACT CATEGORIES: ${categoryList}
+
+DO NOT use any other category names, even if they seem appropriate. Categories like "Bank Charges", "Insurance", "Licenses & Permits", "Security Services" (if not listed above), or any other category name NOT in the list above should be categorized as "General".
+
+IMPORTANT: Items explicitly marked as "misc", "miscellaneous", "misc fee", "other", or "others" should ALWAYS be categorized as "General" regardless of any other keywords they might contain.
+
+If an item matches keywords for a category that is NOT in the allowed list above, use "General" instead.
 
 CRITICAL: The SAME item may belong to DIFFERENT categories depending on the business type. Always consider the business context when categorizing.`;
+
+  const categoryWarning = `
+
+⚠️ REMINDER: ONLY use categories from this list: ${categoryList}
+If an expense doesn't fit any specific category above, use "General". DO NOT invent or use category names not in this list.`;
 
   switch (businessType) {
     case "Food Business":
@@ -2659,7 +2682,9 @@ Raw Materials: Minola cooking oil, Golden Fiesta palm oil, Datu Puti vinegar/soy
 Packaging Materials: Sando bag, poly bag, cling wrap, styrofoam containers, paper cups, plastic cups with lids, straws, mami bowl, paper bag
 Store Supplies: Joy dishwashing, Domex, Zonrox bleach, Ariel detergent, Tide detergent, Lysol, Mr. Clean, Axion dish soap, Champion detergent
 Utilities: Meralco bill, Maynilad bill, Manila Water bill, PLDT broadband, Converge fiber, Globe fiber, Gasul LPG, Shellane LPG, Primus LPG, Solane LPG
-Transportation: Petron fuel, Shell gasoline, Caltex fuel, Seaoil, Phoenix fuel, Lalamove, GrabExpress, LBC, J&T Express, Flash Express`;
+Transportation: Petron fuel, Shell gasoline, Caltex fuel, Seaoil, Phoenix fuel, Lalamove, GrabExpress, LBC, J&T Express, Flash Express
+
+⚠️ STRICT ENFORCEMENT: Use ONLY the categories listed at the top. Do NOT use "Bank Charges", "Insurance", "Licenses & Permits", or any other category not explicitly listed. If an item doesn't clearly fit the listed categories, use "General".`;
 
     case "Meat Shop":
       return `${baseIntro}
@@ -2693,15 +2718,19 @@ Ice & Cold Storage: Block ice, crushed ice, ice delivery, tubig na yelo
 Store Supplies: Meat hooks, styrotray, chopping board, butcher paper, cling wrap, boning knife, cleaver, gloves, apron
 Equipment: Chest freezer, display chiller, weighing scale, meat slicer, meat grinder, band saw
 Utilities: Meralco bill, electric bill, water bill
-Transportation: Petron fuel, Shell gasoline, Caltex, delivery van fuel, Lalamove, trucking fee`;
+Transportation: Petron fuel, Shell gasoline, Caltex, delivery van fuel, Lalamove, trucking fee
+
+⚠️ STRICT ENFORCEMENT: Use ONLY the categories listed at the top. Do NOT use "Bank Charges", "Insurance", "Licenses & Permits", or any other category not explicitly listed. If an item doesn't clearly fit the listed categories, use "General".`;
 
     case "Printing Services":
+    case "Printing Business":
       return `${baseIntro}
 
-CATEGORY RULES FOR PRINTING SERVICES:
+CATEGORY RULES FOR PRINTING SERVICES / PRINTING BUSINESS:
 - "Raw Materials" (PRIMARY): ink (all types), toner, printing paper (A4, A3, letter, legal, tabloid), tarpaulin, vinyl, canvas, substrates, laminate film (cold lamination, hot lamination), adhesive, cutting mat, print film, proofing paper, cardboard, bond paper, thermal paper, sticker paper, magnetic sheet, foam board.
+  ⚠️ NOTE: Raw Materials are ONLY printing supplies (ink, toner, paper, vinyl). Food items like bread, chicken, rice, etc. are NOT Raw Materials for a printing business.
 - "Equipment": printers (laser, inkjet, large format), cutters, laminators, heat presses, binding machines (spiral, thermal, perfect), trimmers, guillotines, scanners, computers, monitors, routers.
-- "Store Supplies": cleaning supplies, office supplies, uniforms, gloves, aprons.
+- "Store Supplies": cleaning supplies, office supplies, uniforms, gloves, aprons, snacks/food for staff consumption.
 - "Packaging Materials": boxes, tubes, protective wrap, bubble wrap, cardboard boxes, mailing envelopes.
 - "Utilities": electricity, internet, phone bills.
 - "Transportation": delivery fees, fuel, courier services.
@@ -2711,19 +2740,25 @@ EXAMPLES OF CONTEXT-AWARE CATEGORIZATION:
 - "Toner" → "Raw Materials" (consumed)
 - "Paper A4" → "Raw Materials" (consumed)
 - "Tarpaulin" → "Raw Materials" (used in printing jobs)
+- "Bread" → "Store Supplies" or "General" (NOT Raw Materials - it's food for staff)
+- "Chicken" → "Store Supplies" or "General" (NOT Raw Materials - it's food for staff)
 - "Printer" → "Equipment"
 - "Laminator" → "Equipment"
 
-CROSS-BUSINESS DISAMBIGUATION — in this Printing Services:
+CROSS-BUSINESS DISAMBIGUATION — in this Printing Services/Printing Business:
 - Paper → "Raw Materials" (consumed, NOT Merchandise Inventory)
 - Tarpaulin → "Raw Materials" (printing substrate, not just a big plastic sheet)
 - Ink/Toner → "Raw Materials" (consumed in every job)
+- Food items (bread, rice, chicken, etc.) → "Store Supplies" or "General" (for staff consumption, NOT Raw Materials)
 
 PHILIPPINE BRAND/PRODUCT QUICK-REFERENCE:
 Raw Materials: Epson ink, Canon ink, HP ink, Brother ink, eco-solvent ink, sublimation ink, UV ink, DTF ink, pigment ink, dye ink, Epson toner, Canon toner, bond paper A4, bond paper A3, legal-size paper, short bond paper, tarpaulin / tarp, vinyl sticker, canvas, backlit film, cold laminate, hot laminate, laminating pouch, sticker paper, foam board, Sintra board, corflute, DTF film, heat transfer paper, NCR paper, thermal paper
 Equipment: Epson large format printer, Canon printer, Roland wide-format, Mimaki printer, HP DesignJet, laminator machine, heat press, cutter plotter, vinyl cutter, guillotine cutter, paper trimmer, binding machine, spiral binder, scanner
+Store Supplies: Office supplies, snacks, coffee, bread, biscuits for staff (NOT Raw Materials)
 Utilities: Meralco bill, Converge fiber, PLDT fiber, Globe broadband
-Transportation: Petron fuel, Shell gasoline, Lalamove, GrabExpress, LBC courier`;
+Transportation: Petron fuel, Shell gasoline, Lalamove, GrabExpress, LBC courier
+
+⚠️ STRICT ENFORCEMENT: Use ONLY the categories listed at the top. Do NOT use "Bank Charges", "Insurance", "Licenses & Permits", or any other category not explicitly listed. If an item doesn't clearly fit the listed categories, use "General".`;
 
     case "Construction":
       return `${baseIntro}
@@ -2758,7 +2793,9 @@ Tools & Hardware: Hammer, handsaw, circular saw, angle grinder, electric drill, 
 Safety Equipment: Hard hat, safety helmet, safety vest, safety harness, safety shoes, work gloves, safety goggles, dust mask
 Labor & Subcontracting: Mason labor, carpenter labor, electrician fee, plumber fee, welder, painter fee, foreman, contractor fee, subcontractor
 Utilities: Meralco, temporary electric, water bill
-Transportation: Petron fuel, Shell gasoline, Caltex, Lalamove trucking, hauling fee, material delivery`;
+Transportation: Petron fuel, Shell gasoline, Caltex, Lalamove trucking, hauling fee, material delivery
+
+⚠️ STRICT ENFORCEMENT: Use ONLY the categories listed at the top. Do NOT use "Bank Charges", "Insurance", "Rent" (if not listed), or any other category not explicitly listed. If an item doesn't clearly fit the listed categories, use "General".`;
 
     case "Retail":
       return `${baseIntro}
@@ -3210,7 +3247,9 @@ PHILIPPINE BRAND/PRODUCT QUICK-REFERENCE:
 Merchandise Inventory: Sinandomeng/Dinorado rice, refined sugar, iodized salt, Datu Puti soy sauce/vinegar, Minola/Golden Fiesta cooking oil, Lucky Me noodles, Payless noodles, Century Tuna, Mega Sardines, Argentina sardines, Spam, corned beef, Yan Yan, Chippy, Piattos, Oishi, Skyflakes, Hansel, Rebisco, Coca-Cola, Pepsi, Royal, Sprite, C2, Nature Spring, Absolute water, Milo sachet, Nescafe sachet, Kopiko Black, Great Taste, Bear Brand powdered milk, Alaska powdered milk, Marlboro, Philip Morris, Fortune cigarette, Palmolive, Head & Shoulders, Safeguard, Dove, Colgate, Close Up, Sensitive, Good morning soap, Rejoice shampoo, Knorr cube, Maggi savor, Mama Sita, boy bawang, Boy Bawang, V-Cut, Chiz Curl
 Packaging Materials: Sando bag, plastic bag, ordinary tie bag
 Equipment: Weighing scale, steel cabinet, small refrigerator
-Utilities: Meralco, water bill`;
+Utilities: Meralco, water bill
+
+⚠️ STRICT ENFORCEMENT: Use ONLY the categories listed at the top. Do NOT use "Bank Charges", "Insurance", "Licenses & Permits", or any other category not explicitly listed. If an item doesn't clearly fit the listed categories, use "General".`;
 
     default:
       return `${baseIntro}
@@ -3237,7 +3276,9 @@ CONTEXT REMINDER: The SAME item can belong to DIFFERENT categories depending on 
 PHILIPPINE CONTEXT: Common brands/providers:
 Utilities: Meralco (electricity), Maynilad/Manila Water (water), PLDT/Converge/Globe/Sky (internet)
 Transportation: Petron/Shell/Caltex/Seaoil (fuel), Lalamove/GrabExpress/J&T/Flash/LBC (courier)
-General: If unsure, use "General" rather than guessing wrong.`;
+General: If unsure, use "General" rather than guessing wrong.
+
+⚠️ STRICT ENFORCEMENT: Use ONLY the categories listed at the top. Do NOT use "Bank Charges", "Insurance", "Licenses & Permits", "Security Services", or any other category not explicitly listed. If an item doesn't clearly fit the listed categories, use "General".`;
   }
 }
 

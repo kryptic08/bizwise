@@ -402,14 +402,19 @@ export const getCombinedTransactions = query({
       }[];
     }[] = [];
 
-    // Process and add sales
-    for (const sale of sales) {
-      const items = await ctx.db
-        .query("saleItems")
-        .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
-        .collect();
+    // Process sales: fetch all saleItems in parallel (avoids N sequential queries / timeout)
+    const salesWithItems = await Promise.all(
+      sales.map(async (sale) => {
+        const items = await ctx.db
+          .query("saleItems")
+          .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+          .collect();
+        return { sale, items };
+      }),
+    );
 
-      const transaction = {
+    for (const { sale, items } of salesWithItems) {
+      allTransactions.push({
         id: sale._id,
         transactionId: sale.transactionId,
         date: getDateFromSale(sale),
@@ -426,19 +431,22 @@ export const getCombinedTransactions = query({
           pieces: item.quantity,
           amount: `₱${item.subtotal.toFixed(2)}`,
         })),
-      };
-
-      allTransactions.push(transaction);
+      });
     }
 
-    // Process and add expenses
-    for (const expense of expenses) {
-      const items = await ctx.db
-        .query("expenseItems")
-        .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
-        .collect();
+    // Process expenses: fetch all expenseItems in parallel
+    const expensesWithItems = await Promise.all(
+      expenses.map(async (expense) => {
+        const items = await ctx.db
+          .query("expenseItems")
+          .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
+          .collect();
+        return { expense, items };
+      }),
+    );
 
-      const transaction = {
+    for (const { expense, items } of expensesWithItems) {
+      allTransactions.push({
         id: expense._id,
         transactionId: expense.transactionId,
         date: getDateFromExpense(expense),
@@ -455,9 +463,7 @@ export const getCombinedTransactions = query({
           pieces: item.quantity,
           amount: `₱${item.total.toFixed(2)}`,
         })),
-      };
-
-      allTransactions.push(transaction);
+      });
     }
 
     // Sort ALL transactions by sortKey (most recent first)
@@ -1048,11 +1054,40 @@ export const getDashboardData = query({
     );
     const productsSold = activeSales.reduce((sum, s) => sum + s.itemCount, 0);
 
-    // ── Top Product & Category ──────────────────────────────────────────
-    // Scan saleItems ONCE for this user's sales (capped at 200 sales)
-    const salesForItems = activeSales.slice(0, 200);
+    // ── Period-specific Top Products / Categories ───────────────────────
+    // Compute the three date windows first so we only fetch saleItems for
+    // sales that are actually in scope — no stale oldest-200 cap.
+    const todayD = new Date(args.todayLocalStr + "T00:00:00");
+    const mm = String(todayD.getMonth() + 1).padStart(2, "0");
+    const monthStart = `${todayD.getFullYear()}-${mm}-01`;
+    const lastDayOfMonth = new Date(
+      todayD.getFullYear(),
+      todayD.getMonth() + 1,
+      0,
+    ).getDate();
+    const monthEnd = `${todayD.getFullYear()}-${mm}-${String(lastDayOfMonth).padStart(2, "0")}`;
+    const yearStart = `${todayD.getFullYear()}-01-01`;
+    const yearEnd = `${todayD.getFullYear()}-12-31`;
+
+    const weeklySales = activeSales.filter(
+      (s) => s.date >= args.weekStartDate && s.date <= args.weekEndDate,
+    );
+    const monthlySales = activeSales.filter(
+      (s) => s.date >= monthStart && s.date <= monthEnd,
+    );
+    const yearlySales = activeSales.filter(
+      (s) => s.date >= yearStart && s.date <= yearEnd,
+    );
+
+    // Union all three period sets to fetch their saleItems in one batch
+    const periodSaleIdSet = new Set([
+      ...weeklySales.map((s) => s._id),
+      ...monthlySales.map((s) => s._id),
+      ...yearlySales.map((s) => s._id),
+    ]);
+    const periodSales = activeSales.filter((s) => periodSaleIdSet.has(s._id));
     const saleItemArrays = await Promise.all(
-      salesForItems.map((s) =>
+      periodSales.map((s) =>
         ctx.db
           .query("saleItems")
           .withIndex("by_sale", (q) => q.eq("saleId", s._id))
@@ -1061,10 +1096,9 @@ export const getDashboardData = query({
     );
     const saleItems = saleItemArrays.flat();
 
-    // ── Period-specific Top Products / Categories ───────────────────────
-    // Helper to compute top product and category from a subset of saleItems
-    const computeTopProductAndCategory = (
-      forSaleIds: Set<string>,
+    // Helper: compute top product and category for a given set of sale IDs
+    const computeTop = (
+      ids: Set<string>,
     ): {
       topProduct: { name: string; count: number };
       topCategory: { name: string; count: number };
@@ -1072,7 +1106,7 @@ export const getDashboardData = query({
       const pm = new Map<string, { name: string; count: number }>();
       const cm = new Map<string, { name: string; count: number }>();
       for (const item of saleItems) {
-        if (!forSaleIds.has(String(item.saleId))) continue;
+        if (!ids.has(String(item.saleId))) continue;
         const p = pm.get(item.productName);
         if (p) p.count += item.quantity;
         else
@@ -1092,45 +1126,16 @@ export const getDashboardData = query({
       return { topProduct: tp, topCategory: tc };
     };
 
-    // Weekly (current week: weekStartDate–weekEndDate)
-    const weeklySaleIds = new Set(
-      activeSales
-        .filter(
-          (s) => s.date >= args.weekStartDate && s.date <= args.weekEndDate,
-        )
-        .map((s) => String(s._id)),
-    );
+    const weeklySaleIdStrs = new Set(weeklySales.map((s) => String(s._id)));
+    const monthlySaleIdStrs = new Set(monthlySales.map((s) => String(s._id)));
+    const yearlySaleIdStrs = new Set(yearlySales.map((s) => String(s._id)));
+
     const { topProduct: topProductWeekly, topCategory: topCategoryWeekly } =
-      computeTopProductAndCategory(weeklySaleIds);
-
-    // Monthly (current calendar month)
-    const todayD = new Date(args.todayLocalStr + "T00:00:00");
-    const mm = String(todayD.getMonth() + 1).padStart(2, "0");
-    const monthStart = `${todayD.getFullYear()}-${mm}-01`;
-    const lastDayOfMonth = new Date(
-      todayD.getFullYear(),
-      todayD.getMonth() + 1,
-      0,
-    ).getDate();
-    const monthEnd = `${todayD.getFullYear()}-${mm}-${String(lastDayOfMonth).padStart(2, "0")}`;
-    const monthlySaleIds = new Set(
-      activeSales
-        .filter((s) => s.date >= monthStart && s.date <= monthEnd)
-        .map((s) => String(s._id)),
-    );
+      computeTop(weeklySaleIdStrs);
     const { topProduct: topProductMonthly, topCategory: topCategoryMonthly } =
-      computeTopProductAndCategory(monthlySaleIds);
-
-    // Yearly (current calendar year)
-    const yearStart = `${todayD.getFullYear()}-01-01`;
-    const yearEnd = `${todayD.getFullYear()}-12-31`;
-    const yearlySaleIds = new Set(
-      activeSales
-        .filter((s) => s.date >= yearStart && s.date <= yearEnd)
-        .map((s) => String(s._id)),
-    );
+      computeTop(monthlySaleIdStrs);
     const { topProduct: topProductYearly, topCategory: topCategoryYearly } =
-      computeTopProductAndCategory(yearlySaleIds);
+      computeTop(yearlySaleIdStrs);
 
     // ── Daily Analytics (Mon–Sun of current week, in-memory) ───────────
     const weekStart = new Date(args.weekStartDate + "T00:00:00");

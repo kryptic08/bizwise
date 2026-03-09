@@ -89,6 +89,30 @@ const AI_MIN_TITLE_LENGTH = 4;
 /** cheapest model — used ONLY for single-item classification (~10 tokens out) */
 const AI_CATEGORY_MODEL = "gemini-flash-lite-latest";
 
+/**
+ * Check if text contains explicit General terms (misc, other, etc.)
+ * that should always be categorized as "General" without AI.
+ */
+function isExplicitGeneralTerm(text: string): boolean {
+  const lower = text.toLowerCase();
+  const explicitTerms = [
+    "misc",
+    "miscellaneous",
+    "misc fee",
+    "miscellaneous fee",
+    "other",
+    "others",
+    "sundry",
+  ];
+
+  // Check for whole word matches
+  return explicitTerms.some((term) => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`\\b${escaped}\\b`, "i");
+    return regex.test(lower);
+  });
+}
+
 interface ExpenseItem {
   id: string;
   category: string;
@@ -463,7 +487,9 @@ export default function AddExpenseScreen() {
             trimmed,
             user?.businessType,
           );
-          shouldTriggerAI = localCategory === "General";
+          // Trigger AI only if no match found AND not an explicit General term
+          shouldTriggerAI =
+            localCategory === "General" && !isExplicitGeneralTerm(trimmed);
         }
 
         // If AI won't fire, cancel any pending timer and clear the spinner
@@ -517,12 +543,14 @@ export default function AddExpenseScreen() {
                 trimmed,
                 user?.businessType,
               );
-              if (localCategory !== "General") {
-                // Solid local match — use it immediately
+              const isExplicitGeneral = isExplicitGeneralTerm(trimmed);
+
+              if (localCategory !== "General" || isExplicitGeneral) {
+                // Solid local match (specific category or explicit General term)
                 updated.category = localCategory;
                 updated.categorySource = "local";
               } else if (item.categorySource !== "user") {
-                // Local engine gave up — AI will fill in after the debounce
+                // Local engine gave up (fallback General) — AI will fill in
                 updated.category = "";
                 updated.categorySource = undefined;
               }
