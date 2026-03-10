@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Model Configuration
     OCR_ENGINE: str = "tesseract"
     USE_NLP_MODEL: bool = True  # BERT NER enabled for improved merchant name extraction
+
+    USE_CNN_MODEL: bool = True  # Enable CNN-based receipt-type/region models (enabled by default)
+    CNN_MODEL_PATH: Optional[str] = None  # Optional path to CNN weights (if required)
     CONFIDENCE_THRESHOLD: float = 0.7
     
     # Server Configuration
