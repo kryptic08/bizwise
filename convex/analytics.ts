@@ -845,6 +845,11 @@ export const getTopSellingProduct = query({
       );
     }
 
+    // Handle empty sales gracefully
+    if (activeSales.length === 0) {
+      return { name: "No Sales Yet", count: 0 };
+    }
+
     // Fetch saleItems only for this user's sales (capped at 200 to stay within limits)
     const saleItemArrays = await Promise.all(
       activeSales.slice(0, 200).map((s) =>
@@ -856,23 +861,42 @@ export const getTopSellingProduct = query({
     );
     const filteredItems = saleItemArrays.flat();
 
-    // Count quantities by product
+    // Handle no sale items
+    if (filteredItems.length === 0) {
+      return { name: "No Sales Yet", count: 0 };
+    }
+
+    // Count quantities by product with validation
     const productCounts = new Map<string, { name: string; count: number }>();
     for (const item of filteredItems) {
-      const existing = productCounts.get(item.productName);
+      // Skip invalid items
+      if (!item || !item.productName || typeof item.quantity !== "number")
+        continue;
+
+      const productKey = item.productName.trim();
+      if (productKey.length === 0) continue;
+
+      const existing = productCounts.get(productKey);
       if (existing) {
         existing.count += item.quantity;
       } else {
-        productCounts.set(item.productName, {
+        productCounts.set(productKey, {
           name: item.productName,
           count: item.quantity,
         });
       }
     }
 
+    // Find top product
     let topProduct = { name: "No Sales Yet", count: 0 };
     for (const product of productCounts.values()) {
-      if (product.count > topProduct.count) topProduct = product;
+      if (
+        product &&
+        typeof product.count === "number" &&
+        product.count > topProduct.count
+      ) {
+        topProduct = product;
+      }
     }
 
     return topProduct;
@@ -899,6 +923,11 @@ export const getTopSellingCategory = query({
       );
     }
 
+    // Handle empty sales gracefully
+    if (activeSales.length === 0) {
+      return { name: "No Sales Yet", count: 0 };
+    }
+
     const saleItemArrays = await Promise.all(
       activeSales.slice(0, 200).map((s) =>
         ctx.db
@@ -909,22 +938,42 @@ export const getTopSellingCategory = query({
     );
     const filteredItems = saleItemArrays.flat();
 
+    // Handle no sale items
+    if (filteredItems.length === 0) {
+      return { name: "No Sales Yet", count: 0 };
+    }
+
+    // Count quantities by category with validation
     const categoryCounts = new Map<string, { name: string; count: number }>();
     for (const item of filteredItems) {
-      const existing = categoryCounts.get(item.category);
+      // Skip invalid items
+      if (!item || !item.category || typeof item.quantity !== "number")
+        continue;
+
+      const categoryKey = item.category.trim();
+      if (categoryKey.length === 0) continue;
+
+      const existing = categoryCounts.get(categoryKey);
       if (existing) {
         existing.count += item.quantity;
       } else {
-        categoryCounts.set(item.category, {
+        categoryCounts.set(categoryKey, {
           name: item.category,
           count: item.quantity,
         });
       }
     }
 
+    // Find top category
     let topCategory = { name: "No Sales Yet", count: 0 };
     for (const category of categoryCounts.values()) {
-      if (category.count > topCategory.count) topCategory = category;
+      if (
+        category &&
+        typeof category.count === "number" &&
+        category.count > topCategory.count
+      ) {
+        topCategory = category;
+      }
     }
 
     return topCategory;
@@ -1079,63 +1128,286 @@ export const getDashboardData = query({
       (s) => s.date >= yearStart && s.date <= yearEnd,
     );
 
-    // Union all three period sets to fetch their saleItems in one batch
-    const periodSaleIdSet = new Set([
-      ...weeklySales.map((s) => s._id),
-      ...monthlySales.map((s) => s._id),
-      ...yearlySales.map((s) => s._id),
-    ]);
-    const periodSales = activeSales.filter((s) => periodSaleIdSet.has(s._id));
-    const saleItemArrays = await Promise.all(
-      periodSales.map((s) =>
-        ctx.db
-          .query("saleItems")
-          .withIndex("by_sale", (q) => q.eq("saleId", s._id))
-          .collect(),
-      ),
+    // Debug logging for sales filtering
+    console.log(
+      `[Dashboard] User ${args.userId} - Total active sales: ${activeSales.length}`,
     );
-    const saleItems = saleItemArrays.flat();
+    if (activeSales.length > 0) {
+      // Log first few sales dates to verify format
+      const sampleDates = activeSales
+        .slice(0, 5)
+        .map((s) => s.date)
+        .join(", ");
+      console.log(`[Dashboard] Sample sale dates: ${sampleDates}`);
+    }
+    console.log(
+      `[Dashboard] Weekly range: ${args.weekStartDate} to ${args.weekEndDate} → ${weeklySales.length} sales`,
+    );
+    console.log(
+      `[Dashboard] Monthly range: ${monthStart} to ${monthEnd} → ${monthlySales.length} sales`,
+    );
+    console.log(
+      `[Dashboard] Yearly range: ${yearStart} to ${yearEnd} → ${yearlySales.length} sales`,
+    );
 
-    // Helper: compute top product and category for a given set of sale IDs
+    // Fetch saleItems separately for each period to avoid ID comparison issues
+    // This ensures accurate aggregation per period without relying on Set comparisons
+    // Handle empty sales arrays gracefully - if no sales, return empty array
+    const [weeklySaleItems, monthlySaleItems, yearlySaleItems] =
+      await Promise.all([
+        weeklySales.length > 0
+          ? Promise.all(
+              weeklySales.map((s) =>
+                ctx.db
+                  .query("saleItems")
+                  .withIndex("by_sale", (q) => q.eq("saleId", s._id))
+                  .collect(),
+              ),
+            ).then((arrays) => arrays.flat())
+          : Promise.resolve([]),
+        monthlySales.length > 0
+          ? Promise.all(
+              monthlySales.map((s) =>
+                ctx.db
+                  .query("saleItems")
+                  .withIndex("by_sale", (q) => q.eq("saleId", s._id))
+                  .collect(),
+              ),
+            ).then((arrays) => arrays.flat())
+          : Promise.resolve([]),
+        yearlySales.length > 0
+          ? Promise.all(
+              yearlySales.map((s) =>
+                ctx.db
+                  .query("saleItems")
+                  .withIndex("by_sale", (q) => q.eq("saleId", s._id))
+                  .collect(),
+              ),
+            ).then((arrays) => arrays.flat())
+          : Promise.resolve([]),
+      ]);
+
+    // Debug logging for saleItems
+    console.log(
+      `[Dashboard] Weekly saleItems: ${weeklySaleItems.length}, Monthly: ${monthlySaleItems.length}, Yearly: ${yearlySaleItems.length}`,
+    );
+    if (weeklySaleItems.length > 0) {
+      // Log first 3 weekly items to inspect data quality
+      weeklySaleItems.slice(0, 3).forEach((item, idx) => {
+        console.log(
+          `[Dashboard] Weekly item ${idx + 1}: productName='${item.productName}' (len=${item.productName?.length ?? 0}), category='${item.category}' (len=${item.category?.length ?? 0}), quantity=${item.quantity}, type=${typeof item.quantity}`,
+        );
+      });
+    } else if (weeklySales.length > 0) {
+      console.log(
+        `[Dashboard] WARNING: ${weeklySales.length} weekly sales found but NO saleItems returned!`,
+      );
+      console.log(`[Dashboard] First weekly sale ID: ${weeklySales[0]._id}`);
+    }
+    if (monthlySaleItems.length > 0) {
+      // Check for data quality issues in monthly items
+      const invalidItems = monthlySaleItems.filter(
+        (item) =>
+          !item.productName ||
+          !item.category ||
+          typeof item.quantity !== "number" ||
+          item.quantity <= 0,
+      );
+      if (invalidItems.length > 0) {
+        console.log(
+          `[Dashboard] WARNING: ${invalidItems.length}/${monthlySaleItems.length} monthly saleItems have invalid data`,
+        );
+      }
+    }
+
+    // Helper: compute top product and category for a given array of saleItems
+    // Robust handling of missing/invalid data - always returns valid results
     const computeTop = (
-      ids: Set<string>,
+      items: Array<{
+        productName: string;
+        category: string;
+        quantity: number;
+      }>,
+      periodLabel: string,
     ): {
       topProduct: { name: string; count: number };
       topCategory: { name: string; count: number };
     } => {
+      // Handle null/undefined input
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        console.log(
+          `[Dashboard] ${periodLabel}: No items to process (items=${items?.length ?? 0})`,
+        );
+        return {
+          topProduct: { name: "No Sales Yet", count: 0 },
+          topCategory: { name: "No Sales Yet", count: 0 },
+        };
+      }
+
       const pm = new Map<string, { name: string; count: number }>();
       const cm = new Map<string, { name: string; count: number }>();
-      for (const item of saleItems) {
-        if (!ids.has(String(item.saleId))) continue;
-        const p = pm.get(item.productName);
-        if (p) p.count += item.quantity;
-        else
-          pm.set(item.productName, {
-            name: item.productName,
+
+      let validItemCount = 0;
+      let skippedItemCount = 0;
+
+      // Count products and categories with strict validation
+      for (const item of items) {
+        // Skip items with missing or invalid data
+        if (!item) {
+          skippedItemCount++;
+          continue;
+        }
+        if (!item.productName || typeof item.productName !== "string") {
+          console.log(
+            `[Dashboard] ${periodLabel}: Skipping item with invalid productName`,
+          );
+          skippedItemCount++;
+          continue;
+        }
+        if (!item.category || typeof item.category !== "string") {
+          console.log(
+            `[Dashboard] ${periodLabel}: Skipping item '${item.productName}' with invalid category`,
+          );
+          skippedItemCount++;
+          continue;
+        }
+        if (typeof item.quantity !== "number" || item.quantity <= 0) {
+          console.log(
+            `[Dashboard] ${periodLabel}: Skipping item '${item.productName}' with invalid quantity: ${item.quantity}`,
+          );
+          skippedItemCount++;
+          continue;
+        }
+
+        // Validate trimmed keys before counting
+        const productKey = item.productName.trim();
+        if (productKey.length === 0) {
+          console.log(
+            `[Dashboard] ${periodLabel}: Skipping item with empty productName after trim`,
+          );
+          skippedItemCount++;
+          continue;
+        }
+
+        const categoryKey = item.category.trim();
+        if (categoryKey.length === 0) {
+          console.log(
+            `[Dashboard] ${periodLabel}: Skipping item '${item.productName}' with empty category after trim`,
+          );
+          skippedItemCount++;
+          continue;
+        }
+
+        // Skip non-product items (fees, add-ons, takeout fees)
+        // These are filtered on frontend, so exclude them from aggregation
+        const productLower = productKey.toLowerCase();
+        const categoryLower = categoryKey.toLowerCase();
+        if (
+          productLower.includes("add-on") ||
+          productLower.includes("takeout") ||
+          productLower.includes("fee") ||
+          categoryLower.includes("add-on") ||
+          categoryLower.includes("takeout") ||
+          categoryLower.includes("fee")
+        ) {
+          console.log(
+            `[Dashboard] ${periodLabel}: Skipping non-product item '${productKey}' / '${categoryKey}' (fee/add-on)`,
+          );
+          skippedItemCount++;
+          continue;
+        }
+
+        // Only increment valid count AFTER all validations pass
+        validItemCount++;
+
+        // Count products by name (use trimmed values for consistency)
+        const existingProduct = pm.get(productKey);
+        if (existingProduct) {
+          existingProduct.count += item.quantity;
+        } else {
+          pm.set(productKey, {
+            name: productKey, // Use trimmed key for display
             count: item.quantity,
           });
-        const c = cm.get(item.category);
-        if (c) c.count += item.quantity;
-        else
-          cm.set(item.category, { name: item.category, count: item.quantity });
+        }
+
+        // Count categories
+        const existingCategory = cm.get(categoryKey);
+        if (existingCategory) {
+          existingCategory.count += item.quantity;
+        } else {
+          cm.set(categoryKey, {
+            name: categoryKey, // Use trimmed key for display
+            count: item.quantity,
+          });
+        }
       }
+
+      console.log(
+        `[Dashboard] ${periodLabel}: Processed ${validItemCount} valid items, skipped ${skippedItemCount}. Products: ${pm.size}, Categories: ${cm.size}`,
+      );
+
+      // Log actual products found for debugging
+      if (pm.size > 0) {
+        const productList = Array.from(pm.entries())
+          .slice(0, 5)
+          .map(([key, val]) => `'${key}':${val.count}`)
+          .join(", ");
+        console.log(
+          `[Dashboard] ${periodLabel}: Top 5 products: ${productList}`,
+        );
+      }
+      if (cm.size > 0) {
+        const categoryList = Array.from(cm.entries())
+          .slice(0, 5)
+          .map(([key, val]) => `'${key}':${val.count}`)
+          .join(", ");
+        console.log(
+          `[Dashboard] ${periodLabel}: Top 5 categories: ${categoryList}`,
+        );
+      }
+
+      // Find top product with robust comparison
       let tp = { name: "No Sales Yet", count: 0 };
-      for (const p of pm.values()) if (p.count > tp.count) tp = p;
+      if (pm.size > 0) {
+        for (const product of pm.values()) {
+          if (
+            product &&
+            typeof product.count === "number" &&
+            product.count > tp.count
+          ) {
+            tp = product;
+          }
+        }
+      }
+
+      // Find top category with robust comparison
       let tc = { name: "No Sales Yet", count: 0 };
-      for (const c of cm.values()) if (c.count > tc.count) tc = c;
+      if (cm.size > 0) {
+        for (const category of cm.values()) {
+          if (
+            category &&
+            typeof category.count === "number" &&
+            category.count > tc.count
+          ) {
+            tc = category;
+          }
+        }
+      }
+
+      console.log(
+        `[Dashboard] ${periodLabel}: Top product='${tp.name}' (${tp.count}), Top category='${tc.name}' (${tc.count})`,
+      );
+
       return { topProduct: tp, topCategory: tc };
     };
 
-    const weeklySaleIdStrs = new Set(weeklySales.map((s) => String(s._id)));
-    const monthlySaleIdStrs = new Set(monthlySales.map((s) => String(s._id)));
-    const yearlySaleIdStrs = new Set(yearlySales.map((s) => String(s._id)));
-
     const { topProduct: topProductWeekly, topCategory: topCategoryWeekly } =
-      computeTop(weeklySaleIdStrs);
+      computeTop(weeklySaleItems, "Weekly");
     const { topProduct: topProductMonthly, topCategory: topCategoryMonthly } =
-      computeTop(monthlySaleIdStrs);
+      computeTop(monthlySaleItems, "Monthly");
     const { topProduct: topProductYearly, topCategory: topCategoryYearly } =
-      computeTop(yearlySaleIdStrs);
+      computeTop(yearlySaleItems, "Yearly");
 
     // ── Daily Analytics (Mon–Sun of current week, in-memory) ───────────
     const weekStart = new Date(args.weekStartDate + "T00:00:00");

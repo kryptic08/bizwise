@@ -65,7 +65,6 @@ const GEMINI_CATEGORY_KEYS = [
   process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_2!,
   process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_3!,
 ];
-let geminiCategoryKeyIndex = 0; // Round-robin counter for category keys
 
 const GOOGLE_AI_MODELS = [
   "gemini-3-pro-preview",
@@ -410,101 +409,113 @@ export default function AddExpenseScreen() {
         `${categories.join(", ")}\n\n` +
         `Reply with ONLY the exact category name from the list. No explanations.`;
 
-      // Try each model in sequence until one succeeds
+      // Try each model with each API key until one succeeds
       let lastError: any = null;
+      const totalAttempts =
+        AI_CATEGORY_MODELS.length * GEMINI_CATEGORY_KEYS.length;
+      let attemptCount = 0;
+
       for (
         let modelIndex = 0;
         modelIndex < AI_CATEGORY_MODELS.length;
         modelIndex++
       ) {
         const model = AI_CATEGORY_MODELS[modelIndex];
-        console.log(
-          `[AI Category] Trying model ${modelIndex + 1}/${AI_CATEGORY_MODELS.length}: ${model}`,
-        );
 
-        try {
-          const apiKey =
-            GEMINI_CATEGORY_KEYS[
-              geminiCategoryKeyIndex % GEMINI_CATEGORY_KEYS.length
-            ];
-          geminiCategoryKeyIndex =
-            (geminiCategoryKeyIndex + 1) % GEMINI_CATEGORY_KEYS.length;
+        // Try each API key for this model
+        for (
+          let keyIndex = 0;
+          keyIndex < GEMINI_CATEGORY_KEYS.length;
+          keyIndex++
+        ) {
+          attemptCount++;
+          const apiKey = GEMINI_CATEGORY_KEYS[keyIndex];
+          const keyNumber = keyIndex + 1;
 
-          // Create fetch with timeout
-          const controller = new AbortController();
-          const timeoutId = setTimeout(
-            () => controller.abort(),
-            AI_CATEGORY_TIMEOUT_MS,
+          console.log(
+            `[AI Category] Attempt ${attemptCount}/${totalAttempts}: ${model} with API Key #${keyNumber}`,
           );
 
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { maxOutputTokens: 15, temperature: 0 },
-              }),
-              signal: controller.signal,
-            },
-          );
+          try {
+            // Create fetch with timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(
+              () => controller.abort(),
+              AI_CATEGORY_TIMEOUT_MS,
+            );
 
-          clearTimeout(timeoutId);
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: prompt }] }],
+                  generationConfig: { maxOutputTokens: 15, temperature: 0 },
+                }),
+                signal: controller.signal,
+              },
+            );
 
-          if (!response.ok) {
-            const errorText = await response.text();
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              console.warn(
+                `[AI Category] ${model} + Key #${keyNumber} → HTTP ${response.status}`,
+              );
+              lastError = new Error(`HTTP ${response.status}: ${errorText}`);
+              continue; // Try next key or model
+            }
+
+            const data = await response.json();
+            const raw: string =
+              data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+
+            console.log(
+              `[AI Category] ${model} + Key #${keyNumber} response: "${raw}"`,
+            );
+
+            // Validate: response must exactly match one of the allowed categories
+            const matched = categories.find(
+              (c) => c.toLowerCase() === raw.toLowerCase(),
+            );
+
+            if (matched && matched !== "General") {
+              console.log(
+                `[AI Category] ✓ SUCCESS: ${model} + Key #${keyNumber} → "${matched}"`,
+              );
+              aiCategoryCache.current.set(cacheKey, matched);
+              setExpenses((prev) =>
+                prev.map((item) =>
+                  item.id === id && item.categorySource !== "user"
+                    ? { ...item, category: matched, categorySource: "ai" }
+                    : item,
+                ),
+              );
+              clearLoadingState();
+              return; // Success! Exit function
+            } else {
+              console.warn(
+                `[AI Category] ${model} + Key #${keyNumber} returned invalid/General: "${raw}"`,
+              );
+              lastError = new Error(`Invalid category response: ${raw}`);
+              continue; // Try next key or model
+            }
+          } catch (modelError: any) {
             console.warn(
-              `[AI Category] Model ${model} HTTP ${response.status}:`,
-              errorText,
+              `[AI Category] ${model} + Key #${keyNumber} error:`,
+              modelError.message,
             );
-            lastError = new Error(`HTTP ${response.status}: ${errorText}`);
-            continue; // Try next model
+            lastError = modelError;
+            continue; // Try next key or model
           }
-
-          const data = await response.json();
-          const raw: string =
-            data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-
-          console.log(`[AI Category] Model ${model} raw response: "${raw}"`);
-
-          // Validate: response must exactly match one of the allowed categories
-          const matched = categories.find(
-            (c) => c.toLowerCase() === raw.toLowerCase(),
-          );
-
-          if (matched && matched !== "General") {
-            console.log(`[AI Category] ✓ SUCCESS with ${model}: "${matched}"`);
-            aiCategoryCache.current.set(cacheKey, matched);
-            setExpenses((prev) =>
-              prev.map((item) =>
-                item.id === id && item.categorySource !== "user"
-                  ? { ...item, category: matched, categorySource: "ai" }
-                  : item,
-              ),
-            );
-            clearLoadingState();
-            return; // Success! Exit function
-          } else {
-            console.warn(
-              `[AI Category] Model ${model} returned invalid/General category: "${raw}"`,
-            );
-            lastError = new Error(`Invalid category response: ${raw}`);
-            continue; // Try next model
-          }
-        } catch (modelError: any) {
-          console.warn(
-            `[AI Category] Model ${model} error:`,
-            modelError.message,
-          );
-          lastError = modelError;
-          continue; // Try next model
         }
       }
 
-      // All models failed
+      // All model+key combinations failed
       console.error(
-        `[AI Category] ✗ All ${AI_CATEGORY_MODELS.length} models failed for "${trimmed}"`,
+        `[AI Category] ✗ All ${totalAttempts} attempts failed (${AI_CATEGORY_MODELS.length} models × ${GEMINI_CATEGORY_KEYS.length} keys) for "${trimmed}"`,
         lastError,
       );
     } catch (err: any) {
