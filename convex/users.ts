@@ -22,7 +22,6 @@ export const createUser = mutation({
     email: v.string(),
     password: v.string(),
     name: v.optional(v.string()),
-    businessType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check if user already exists
@@ -42,7 +41,6 @@ export const createUser = mutation({
       email: args.email.toLowerCase(),
       password: hashed,
       name: args.name || args.email.split("@")[0],
-      businessType: args.businessType,
       createdAt: Date.now(),
     });
 
@@ -100,7 +98,6 @@ export const loginUser = mutation({
       name: user.name,
       phone: user.phone,
       pin: user.pin,
-      businessType: user.businessType,
       profilePicture: profilePictureUrl,
     };
   },
@@ -434,30 +431,29 @@ export const getTargetIncome = query({
   },
 });
 
-// Update user's business type
-export const updateBusinessType = mutation({
-  args: {
-    userId: v.id("users"),
-    businessType: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const user = await ctx.db.get(args.userId);
-    if (!user) {
-      throw new Error("User not found");
+// One-off cleanup for legacy user documents that still contain businessType.
+export const removeLegacyBusinessTypeFromUsers = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    let updatedCount = 0;
+
+    for (const user of users) {
+      if (user.businessType === undefined) {
+        continue;
+      }
+
+      const { _creationTime, businessType, ...rest } = user;
+      void _creationTime;
+      void businessType;
+
+      await ctx.db.replace(user._id, rest);
+      updatedCount += 1;
     }
 
-    await ctx.db.patch(args.userId, { businessType: args.businessType });
-    return { success: true, businessType: args.businessType };
-  },
-});
-
-// Get user's business type
-export const getBusinessType = query({
-  args: { userId: v.id("users") },
-  handler: async (ctx, args) => {
-    const user = await ctx.db.get(args.userId);
-    if (!user) return null;
-
-    return user.businessType || null;
+    return {
+      scannedCount: users.length,
+      updatedCount,
+    };
   },
 });

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 
 // Get all expenses for a user
 export const getExpenses = query({
@@ -53,6 +53,8 @@ const generateExpenseId = (): string => {
   }
   return `EXP-${id}`;
 };
+
+const RECEIPT_IMAGE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 // Add expense for a user (legacy - single item)
 export const addExpense = mutation({
@@ -121,14 +123,10 @@ export const addExpense = mutation({
 export const addExpenseGroup = mutation({
   args: {
     userId: v.id("users"),
-    items: v.array(
-      v.object({
-        category: v.string(),
-        title: v.string(),
-        amount: v.number(),
-        quantity: v.number(),
-      }),
-    ),
+    category: v.string(),
+    receiptNumber: v.string(),
+    itemCount: v.number(),
+    totalAmount: v.number(),
     receiptImageStorageId: v.optional(v.id("_storage")), // Convex storage ID
     receiptImage: v.optional(v.string()), // Legacy: local URI
     ocrText: v.optional(v.string()),
@@ -167,44 +165,38 @@ export const addExpenseGroup = mutation({
       minute: "2-digit",
       hour12: true,
     });
-
-    // For fractional quantities (< 1, e.g. 0.25 kg), the entered amount is the full
-    // cost for that weight — keep as-is. For whole-number quantities (>= 1) multiply.
-    const computeItemTotal = (amount: number, qty: number) =>
-      qty < 1 ? amount : amount * qty;
-    const totalAmount = args.items.reduce(
-      (sum, item) => sum + computeItemTotal(item.amount, item.quantity),
-      0,
-    );
-    const transactionId = generateExpenseId();
+    const normalizedReceiptNumber = args.receiptNumber.trim();
+    const transactionId = normalizedReceiptNumber || generateExpenseId();
 
     // Create the expense transaction
     const expenseId = await ctx.db.insert("expenses", {
       userId: args.userId,
       transactionId,
-      totalAmount,
-      itemCount: args.items.length,
+      totalAmount: args.totalAmount,
+      itemCount: args.itemCount,
       date,
       time,
+      expenseCategory: args.category,
+      receiptNumber: transactionId,
       receiptImageStorageId: args.receiptImageStorageId,
       receiptImage: args.receiptImage,
+      receiptImageExpiresAt: args.receiptImageStorageId
+        ? timestamp + RECEIPT_IMAGE_TTL_MS
+        : undefined,
       ocrText: args.ocrText,
       createdAt: timestamp,
     });
 
-    // Add all expense items
-    for (const item of args.items) {
-      await ctx.db.insert("expenseItems", {
-        expenseId,
-        category: item.category,
-        title: item.title,
-        amount: item.amount,
-        quantity: item.quantity,
-        total: computeItemTotal(item.amount, item.quantity),
-      });
-    }
+    await ctx.db.insert("expenseItems", {
+      expenseId,
+      category: args.category,
+      title: transactionId ? `Receipt ${transactionId}` : "Scanned receipt",
+      amount: args.totalAmount,
+      quantity: 1,
+      total: args.totalAmount,
+    });
 
-    return { expenseId, transactionId, itemCount: args.items.length };
+    return { expenseId, transactionId, itemCount: args.itemCount };
   },
 });
 
@@ -279,6 +271,7 @@ export const restoreExpense = mutation({
 export const permanentDeleteExpense = mutation({
   args: { id: v.id("expenses") },
   handler: async (ctx, args) => {
+    const expense = await ctx.db.get(args.id);
     const items = await ctx.db
       .query("expenseItems")
       .withIndex("by_expense", (q) => q.eq("expenseId", args.id))
@@ -286,6 +279,36 @@ export const permanentDeleteExpense = mutation({
     for (const item of items) {
       await ctx.db.delete(item._id);
     }
+    if (expense?.receiptImageStorageId) {
+      await ctx.storage.delete(expense.receiptImageStorageId);
+    }
     await ctx.db.delete(args.id);
+  },
+});
+
+export const cleanupExpiredReceiptImages = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const expenses = await ctx.db.query("expenses").collect();
+    let cleanedCount = 0;
+
+    for (const expense of expenses) {
+      if (
+        expense.receiptImageStorageId &&
+        expense.receiptImageExpiresAt &&
+        expense.receiptImageExpiresAt <= now
+      ) {
+        await ctx.storage.delete(expense.receiptImageStorageId);
+        await ctx.db.patch(expense._id, {
+          receiptImageStorageId: undefined,
+          receiptImage: undefined,
+          receiptImageExpiresAt: undefined,
+        });
+        cleanedCount += 1;
+      }
+    }
+
+    return { cleanedCount };
   },
 });

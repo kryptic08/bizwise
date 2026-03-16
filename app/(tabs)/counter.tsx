@@ -88,7 +88,9 @@ export default function CounterScreen() {
     const loadSavedCart = async () => {
       try {
         // Check if there's a pending checkout completion
-        const checkoutComplete = await AsyncStorage.getItem("bizwise_checkout_complete");
+        const checkoutComplete = await AsyncStorage.getItem(
+          "bizwise_checkout_complete",
+        );
         if (checkoutComplete === "true") {
           // Clear cart after successful checkout
           await AsyncStorage.removeItem(CART_CACHE_KEY);
@@ -143,11 +145,11 @@ export default function CounterScreen() {
   // Migrate default categories if none exist
   React.useEffect(() => {
     if (categories && categories.length === 0 && user?.userId) {
-      migrateDefaults({ userId: user.userId, businessType: user.businessType })
+      migrateDefaults({ userId: user.userId })
         .then(() => console.log("Default categories migrated"))
         .catch(console.error);
     }
-  }, [categories, user?.userId, user?.businessType]);
+  }, [categories, user?.userId]);
 
   // Group products by category with quantity state
   const productsByCategory = useMemo(() => {

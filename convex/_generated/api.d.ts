@@ -12,6 +12,7 @@ import type * as analytics from "../analytics.js";
 import type * as categories from "../categories.js";
 import type * as clearAndReseedTestUser from "../clearAndReseedTestUser.js";
 import type * as clearData from "../clearData.js";
+import type * as crons from "../crons.js";
 import type * as debugUsers from "../debugUsers.js";
 import type * as expenses from "../expenses.js";
 import type * as files from "../files.js";
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   categories: typeof categories;
   clearAndReseedTestUser: typeof clearAndReseedTestUser;
   clearData: typeof clearData;
+  crons: typeof crons;
   debugUsers: typeof debugUsers;
   expenses: typeof expenses;
   files: typeof files;

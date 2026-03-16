@@ -9,26 +9,12 @@ import React, {
 } from "react";
 import { Id } from "../../convex/_generated/dataModel";
 
-export type BusinessType =
-  | "Food Business"
-  | "Printing Business"
-  | "Laundry Shop"
-  | "Sari-sari Store";
-
-export const BUSINESS_TYPES: BusinessType[] = [
-  "Food Business",
-  "Printing Business",
-  "Laundry Shop",
-  "Sari-sari Store",
-];
-
 interface User {
   userId: Id<"users">;
   email: string;
   name: string;
   phone?: string;
   pin?: string;
-  businessType?: BusinessType;
   profilePicture?: string;
 }
 

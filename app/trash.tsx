@@ -3,10 +3,12 @@ import { useRouter } from "expo-router";
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckSquare,
   RotateCcw,
+  Square,
   Trash2,
 } from "lucide-react-native";
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -49,6 +51,10 @@ export default function TrashScreen() {
   const { user } = useAuth();
 
   const { data: trashItems } = useTrashTransactions(user?.userId);
+  const items = (trashItems ?? []) as TrashItem[];
+  const promptedExpiredKeyRef = useRef("");
+  const [expiredSelectionMode, setExpiredSelectionMode] = useState(false);
+  const [selectedExpiredIds, setSelectedExpiredIds] = useState<string[]>([]);
 
   const purgeExpiredTrash = useMutation(api.analytics.purgeExpiredTrash);
   const restoreSale = useMutation(api.sales.restoreSale);
@@ -58,23 +64,190 @@ export default function TrashScreen() {
     api.expenses.permanentDeleteExpense,
   );
 
-  // Purge expired items whenever the screen is opened
-  useEffect(() => {
-    if (user?.userId) {
-      purgeExpiredTrash({ userId: user.userId as Id<"users"> }).catch(() => {});
-    }
-  }, [user?.userId]);
+  const expiredItems = useMemo(
+    () => items.filter((item) => item.daysRemaining <= 0),
+    [items],
+  );
 
-  const handleRestore = async (item: TrashItem) => {
-    try {
-      if (item.type === "income") {
-        await restoreSale({ id: item.id as Id<"sales"> });
-      } else {
-        await restoreExpense({ id: item.id as Id<"expenses"> });
-      }
-    } catch {
-      Alert.alert("Error", "Failed to restore transaction. Please try again.");
+  const selectedExpiredItems = useMemo(
+    () => expiredItems.filter((item) => selectedExpiredIds.includes(item.id)),
+    [expiredItems, selectedExpiredIds],
+  );
+
+  const restoreTransaction = async (item: TrashItem) => {
+    if (item.type === "income") {
+      await restoreSale({ id: item.id as Id<"sales"> });
+      return;
     }
+    await restoreExpense({ id: item.id as Id<"expenses"> });
+  };
+
+  const toggleExpiredSelection = (id: string) => {
+    setSelectedExpiredIds((prev) =>
+      prev.includes(id)
+        ? prev.filter((itemId) => itemId !== id)
+        : [...prev, id],
+    );
+  };
+
+  const handleSelectAllExpired = () => {
+    setSelectedExpiredIds(expiredItems.map((item) => item.id));
+  };
+
+  const handleClearExpiredSelection = () => {
+    setSelectedExpiredIds([]);
+  };
+
+  const restoreExpiredItems = async (targets: TrashItem[]) => {
+    for (const item of targets) {
+      await restoreTransaction(item);
+    }
+  };
+
+  const handleRestoreSelectedExpired = () => {
+    if (selectedExpiredItems.length === 0) {
+      Alert.alert("No Selection", "Select expired transactions to restore.");
+      return;
+    }
+
+    Alert.alert(
+      "Restore Selected Transactions?",
+      `Restore ${selectedExpiredItems.length} expired transaction(s)?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Restore",
+          onPress: async () => {
+            try {
+              await restoreExpiredItems(selectedExpiredItems);
+              setSelectedExpiredIds([]);
+              setExpiredSelectionMode(false);
+            } catch {
+              Alert.alert(
+                "Error",
+                "Failed to restore selected transactions. Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleRestoreAllExpired = () => {
+    if (expiredItems.length === 0) {
+      Alert.alert("No Expired Transactions", "Nothing to restore.");
+      return;
+    }
+
+    Alert.alert(
+      "Restore All Expired Transactions?",
+      `Restore all ${expiredItems.length} expired transaction(s)?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Restore All",
+          onPress: async () => {
+            try {
+              await restoreExpiredItems(expiredItems);
+              setSelectedExpiredIds([]);
+              setExpiredSelectionMode(false);
+            } catch {
+              Alert.alert(
+                "Error",
+                "Failed to restore expired transactions. Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // Background timer: automatically purge transactions that reached the TTL.
+  useEffect(() => {
+    if (!user?.userId) return;
+
+    const timer = setInterval(() => {
+      if (expiredSelectionMode) {
+        return;
+      }
+      purgeExpiredTrash({ userId: user.userId as Id<"users"> }).catch(() => {});
+    }, 60 * 1000);
+
+    return () => clearInterval(timer);
+  }, [user?.userId, expiredSelectionMode]);
+
+  useEffect(() => {
+    if (expiredItems.length === 0) {
+      setExpiredSelectionMode(false);
+      setSelectedExpiredIds([]);
+    }
+  }, [expiredItems.length]);
+
+  // Ask once per unique set of expired transactions.
+  useEffect(() => {
+    if (!user?.userId || expiredItems.length === 0) return;
+
+    const key = expiredItems
+      .map((item) => item.id)
+      .sort()
+      .join("|");
+    if (!key || promptedExpiredKeyRef.current === key) return;
+    promptedExpiredKeyRef.current = key;
+
+    Alert.alert(
+      "Expired Transactions",
+      "Are you sure you don't want to restore the transactions? This will delete all expired transactions.",
+      [
+        {
+          text: "No",
+          style: "cancel",
+          // No = let user choose which expired transactions to restore.
+          onPress: () => {
+            setExpiredSelectionMode(true);
+            setSelectedExpiredIds([]);
+          },
+        },
+        {
+          text: "Yes",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await purgeExpiredTrash({ userId: user.userId as Id<"users"> });
+            } catch {
+              Alert.alert(
+                "Error",
+                "Failed to delete expired transactions. Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  }, [expiredItems, user?.userId]);
+
+  const handleRestore = (item: TrashItem) => {
+    Alert.alert(
+      "Restore Transaction?",
+      `Restore ${item.transactionId} back to your transactions?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Restore",
+          onPress: async () => {
+            try {
+              await restoreTransaction(item);
+            } catch {
+              Alert.alert(
+                "Error",
+                "Failed to restore transaction. Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handlePermanentDelete = (item: TrashItem) => {
@@ -108,85 +281,111 @@ export default function TrashScreen() {
     return COLORS.textGray;
   };
 
-  const renderItem = ({ item }: { item: TrashItem }) => (
-    <View style={styles.card}>
-      <View style={styles.cardTop}>
-        <View style={styles.cardLeft}>
-          <View
-            style={[
-              styles.typeBadge,
-              {
-                backgroundColor: item.type === "income" ? "#dcfce7" : "#fee2e2",
-              },
-            ]}
-          >
-            <Text
+  const renderItem = ({ item }: { item: TrashItem }) => {
+    const isExpired = item.daysRemaining <= 0;
+    const isSelected = selectedExpiredIds.includes(item.id);
+
+    return (
+      <View
+        style={[
+          styles.card,
+          expiredSelectionMode &&
+            isExpired &&
+            isSelected &&
+            styles.selectedCard,
+        ]}
+      >
+        <View style={styles.cardTop}>
+          <View style={styles.cardLeft}>
+            <View
               style={[
-                styles.typeBadgeText,
-                { color: item.type === "income" ? COLORS.green : COLORS.red },
+                styles.typeBadge,
+                {
+                  backgroundColor:
+                    item.type === "income" ? "#dcfce7" : "#fee2e2",
+                },
               ]}
             >
-              {item.type === "income" ? "Income" : "Expense"}
-            </Text>
+              <Text
+                style={[
+                  styles.typeBadgeText,
+                  { color: item.type === "income" ? COLORS.green : COLORS.red },
+                ]}
+              >
+                {item.type === "income" ? "Income" : "Expenses"}
+              </Text>
+            </View>
+            <Text style={styles.transactionId}>{item.transactionId}</Text>
           </View>
-          <Text style={styles.transactionId}>{item.transactionId}</Text>
-        </View>
-        <Text
-          style={[
-            styles.amount,
-            { color: item.type === "income" ? COLORS.green : COLORS.red },
-          ]}
-        >
-          {item.type === "expense" ? "-" : "+"}
-          {item.amount}
-        </Text>
-      </View>
-
-      <View style={styles.cardMeta}>
-        <Text style={styles.metaText}>Transaction date: {item.date}</Text>
-        <Text style={styles.metaText}>Trashed: {item.trashedDate}</Text>
-      </View>
-
-      <View style={styles.cardBottom}>
-        <View style={styles.daysBadge}>
-          <AlertTriangle
-            size={12}
-            color={getDaysColor(item.daysRemaining)}
-            style={{ marginRight: 4 }}
-          />
           <Text
             style={[
-              styles.daysText,
-              { color: getDaysColor(item.daysRemaining) },
+              styles.amount,
+              { color: item.type === "income" ? COLORS.green : COLORS.red },
             ]}
           >
-            {item.daysRemaining === 0
-              ? "Expires today"
-              : `${item.daysRemaining}d remaining`}
+            {item.type === "expense" ? "-" : "+"}
+            {item.amount}
           </Text>
         </View>
 
-        <View style={styles.actions}>
+        {expiredSelectionMode && isExpired ? (
           <TouchableOpacity
-            style={styles.restoreBtn}
-            onPress={() => handleRestore(item)}
+            style={styles.selectRow}
+            onPress={() => toggleExpiredSelection(item.id)}
           >
-            <RotateCcw size={14} color={COLORS.primaryBlue} />
-            <Text style={styles.restoreBtnText}>Restore</Text>
+            {isSelected ? (
+              <CheckSquare size={18} color={COLORS.primaryBlue} />
+            ) : (
+              <Square size={18} color={COLORS.textGray} />
+            )}
+            <Text style={styles.selectRowText}>Select for restore</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deleteBtn}
-            onPress={() => handlePermanentDelete(item)}
-          >
-            <Trash2 size={14} color={COLORS.red} />
-            <Text style={styles.deleteBtnText}>Delete</Text>
-          </TouchableOpacity>
+        ) : null}
+
+        <View style={styles.cardMeta}>
+          <Text style={styles.metaText}>Transaction date: {item.date}</Text>
+          <Text style={styles.metaText}>Trashed: {item.trashedDate}</Text>
+        </View>
+
+        <View style={styles.cardBottom}>
+          <View style={styles.daysBadge}>
+            <AlertTriangle
+              size={12}
+              color={getDaysColor(item.daysRemaining)}
+              style={{ marginRight: 4 }}
+            />
+            <Text
+              style={[
+                styles.daysText,
+                { color: getDaysColor(item.daysRemaining) },
+              ]}
+            >
+              {item.daysRemaining === 0
+                ? "Expires today"
+                : `${item.daysRemaining}d remaining`}
+            </Text>
+          </View>
+
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={styles.restoreBtn}
+              onPress={() => handleRestore(item)}
+            >
+              <RotateCcw size={14} color={COLORS.primaryBlue} />
+              <Text style={styles.restoreBtnText}>Restore</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.deleteBtn}
+              onPress={() => handlePermanentDelete(item)}
+            >
+              <Trash2 size={14} color={COLORS.red} />
+              <Text style={styles.deleteBtnText}>Delete</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
-    </View>
-  );
-
-  const items = (trashItems ?? []) as TrashItem[];
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -207,16 +406,55 @@ export default function TrashScreen() {
         <View style={styles.infoBanner}>
           <AlertTriangle size={16} color={COLORS.orange} />
           <Text style={styles.infoBannerText}>
-            Items are permanently deleted after 30 days
+            Items are permanently deleted after 90 days
           </Text>
         </View>
+
+        {expiredSelectionMode && expiredItems.length > 0 ? (
+          <View style={styles.selectionPanel}>
+            <Text style={styles.selectionTitle}>Expired Transactions</Text>
+            <Text style={styles.selectionSubtitle}>
+              Select expired transactions to restore, or restore all.
+            </Text>
+            <View style={styles.selectionActionsRow}>
+              <TouchableOpacity
+                style={styles.selectionSecondaryBtn}
+                onPress={handleSelectAllExpired}
+              >
+                <Text style={styles.selectionSecondaryBtnText}>Select All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.selectionSecondaryBtn}
+                onPress={handleClearExpiredSelection}
+              >
+                <Text style={styles.selectionSecondaryBtnText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.selectionActionsRow}>
+              <TouchableOpacity
+                style={styles.selectionPrimaryBtn}
+                onPress={handleRestoreSelectedExpired}
+              >
+                <Text style={styles.selectionPrimaryBtnText}>
+                  Restore Selected
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.selectionPrimaryBtn}
+                onPress={handleRestoreAllExpired}
+              >
+                <Text style={styles.selectionPrimaryBtnText}>Restore All</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
 
         {items.length === 0 ? (
           <View style={styles.emptyState}>
             <Trash2 size={56} color={COLORS.borderGray} />
             <Text style={styles.emptyTitle}>Your trash is empty</Text>
             <Text style={styles.emptySubtitle}>
-              Deleted transactions will appear here for 30 days before being
+              Deleted transactions will appear here for 90 days before being
               permanently removed.
             </Text>
           </View>
@@ -291,6 +529,10 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
+  selectedCard: {
+    borderWidth: 1,
+    borderColor: COLORS.primaryBlue,
+  },
   cardTop: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -324,6 +566,17 @@ const styles = StyleSheet.create({
   cardMeta: {
     gap: 2,
     marginBottom: 10,
+  },
+  selectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  selectRowText: {
+    fontSize: 12,
+    color: COLORS.primaryBlue,
+    fontWeight: "600",
   },
   metaText: {
     fontSize: 12,
@@ -398,5 +651,55 @@ const styles = StyleSheet.create({
     color: COLORS.textGray,
     textAlign: "center",
     lineHeight: 22,
+  },
+  selectionPanel: {
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.borderGray,
+    marginHorizontal: 20,
+    marginBottom: 12,
+    padding: 12,
+    gap: 10,
+  },
+  selectionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  selectionSubtitle: {
+    fontSize: 12,
+    color: COLORS.textGray,
+  },
+  selectionActionsRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  selectionSecondaryBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: COLORS.primaryBlue,
+    borderRadius: 8,
+    paddingVertical: 9,
+  },
+  selectionSecondaryBtnText: {
+    color: COLORS.primaryBlue,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  selectionPrimaryBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 8,
+    paddingVertical: 10,
+  },
+  selectionPrimaryBtnText: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: "700",
   },
 });

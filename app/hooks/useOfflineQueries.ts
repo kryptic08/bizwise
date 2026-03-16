@@ -232,7 +232,7 @@ export function useAllTransactions(userId: string | undefined) {
   );
   return useOfflineCached(
     live,
-    userId ? `all_transactions_${userId}` : undefined,
+    userId ? `all_transactions_v2_${userId}` : undefined,
   );
 }
 
@@ -248,7 +248,7 @@ export function useTransactions(
   );
   return useOfflineCached(
     live,
-    userId ? `transactions_${userId}_${limit}_${cursor ?? 0}` : undefined,
+    userId ? `transactions_v2_${userId}_${limit}_${cursor ?? 0}` : undefined,
   );
 }
 

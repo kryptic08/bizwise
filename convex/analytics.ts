@@ -400,6 +400,14 @@ export const getCombinedTransactions = query({
         pieces: number;
         amount: string;
       }[];
+      expenseSummary?: {
+        receiptNumber: string;
+        category: string;
+        totalItems: number;
+        totalAmount: string;
+        hasReceiptImage: boolean;
+        receiptImageUrl?: string;
+      };
     }[] = [];
 
     // Process sales: fetch all saleItems in parallel (avoids N sequential queries / timeout)
@@ -419,7 +427,7 @@ export const getCombinedTransactions = query({
         transactionId: sale.transactionId,
         date: getDateFromSale(sale),
         time: formatTime(sale.createdAt),
-        items: `${sale.itemCount} items`,
+        items: `${sale.itemCount} item${sale.itemCount === 1 ? "" : "s"}`,
         amount: `₱${sale.totalAmount.toFixed(2)}`,
         type: "income" as const,
         createdAt: sale.createdAt,
@@ -441,17 +449,20 @@ export const getCombinedTransactions = query({
           .query("expenseItems")
           .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
           .collect();
-        return { expense, items };
+        const receiptImageUrl = expense.receiptImageStorageId
+          ? await ctx.storage.getUrl(expense.receiptImageStorageId)
+          : expense.receiptImage;
+        return { expense, items, receiptImageUrl };
       }),
     );
 
-    for (const { expense, items } of expensesWithItems) {
+    for (const { expense, items, receiptImageUrl } of expensesWithItems) {
       allTransactions.push({
         id: expense._id,
         transactionId: expense.transactionId,
         date: getDateFromExpense(expense),
         time: formatTime(expense.createdAt),
-        items: `${expense.itemCount} items`,
+        items: `${expense.itemCount} item${expense.itemCount === 1 ? "" : "s"}`,
         amount: `₱${expense.totalAmount.toFixed(2)}`,
         type: "expense" as const,
         createdAt: expense.createdAt,
@@ -463,6 +474,14 @@ export const getCombinedTransactions = query({
           pieces: item.quantity,
           amount: `₱${item.total.toFixed(2)}`,
         })),
+        expenseSummary: {
+          receiptNumber: expense.receiptNumber || "Not detected",
+          category: expense.expenseCategory || "Not detected",
+          totalItems: expense.itemCount,
+          totalAmount: `₱${expense.totalAmount.toFixed(2)}`,
+          hasReceiptImage: Boolean(receiptImageUrl),
+          receiptImageUrl: receiptImageUrl || undefined,
+        },
       });
     }
 
@@ -631,6 +650,14 @@ export const getCombinedTransactionsPaginated = query({
         pieces: number;
         amount: string;
       }>;
+      expenseSummary?: {
+        receiptNumber: string;
+        category: string;
+        totalItems: number;
+        totalAmount: string;
+        hasReceiptImage: boolean;
+        receiptImageUrl?: string;
+      };
     }> = [];
 
     // Process sales
@@ -645,7 +672,7 @@ export const getCombinedTransactionsPaginated = query({
         transactionId: sale.transactionId,
         date: formatDateFromSale(sale),
         time: formatTime(sale.createdAt),
-        items: `${sale.itemCount} items`,
+        items: `${sale.itemCount} item${sale.itemCount === 1 ? "" : "s"}`,
         amount: `₱${sale.totalAmount.toFixed(2)}`,
         type: "income" as const,
         createdAt: sale.createdAt,
@@ -666,13 +693,16 @@ export const getCombinedTransactionsPaginated = query({
         .query("expenseItems")
         .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
         .collect();
+      const receiptImageUrl = expense.receiptImageStorageId
+        ? await ctx.storage.getUrl(expense.receiptImageStorageId)
+        : expense.receiptImage;
 
       allTransactions.push({
         id: expense._id,
         transactionId: expense.transactionId,
         date: formatDateFromExpense(expense),
         time: formatTime(expense.createdAt),
-        items: `${expense.itemCount} items`,
+        items: `${expense.itemCount} item${expense.itemCount === 1 ? "" : "s"}`,
         amount: `₱${expense.totalAmount.toFixed(2)}`,
         type: "expense" as const,
         createdAt: expense.createdAt,
@@ -684,6 +714,14 @@ export const getCombinedTransactionsPaginated = query({
           pieces: item.quantity,
           amount: `₱${item.total.toFixed(2)}`,
         })),
+        expenseSummary: {
+          receiptNumber: expense.receiptNumber || "Not detected",
+          category: expense.expenseCategory || "Not detected",
+          totalItems: expense.itemCount,
+          totalAmount: `₱${expense.totalAmount.toFixed(2)}`,
+          hasReceiptImage: Boolean(receiptImageUrl),
+          receiptImageUrl: receiptImageUrl || undefined,
+        },
       });
     }
 
@@ -1232,6 +1270,8 @@ export const getDashboardData = query({
     ): {
       topProduct: { name: string; count: number };
       topCategory: { name: string; count: number };
+      leastProduct: { name: string; count: number };
+      leastCategory: { name: string; count: number };
     } => {
       // Handle null/undefined input
       if (!items || !Array.isArray(items) || items.length === 0) {
@@ -1241,6 +1281,8 @@ export const getDashboardData = query({
         return {
           topProduct: { name: "No Sales Yet", count: 0 },
           topCategory: { name: "No Sales Yet", count: 0 },
+          leastProduct: { name: "No Sales Yet", count: 0 },
+          leastCategory: { name: "No Sales Yet", count: 0 },
         };
       }
 
@@ -1395,19 +1437,59 @@ export const getDashboardData = query({
         }
       }
 
+      // Find least-selling product/category by quantity sold (strictly > 0)
+      const findLeast = (map: Map<string, { name: string; count: number }>) => {
+        if (map.size === 0) return { name: "No Sales Yet", count: 0 };
+
+        let least = { name: "No Sales Yet", count: 0 };
+        let min = Infinity;
+        for (const item of map.values()) {
+          if (
+            item &&
+            typeof item.count === "number" &&
+            item.count > 0 &&
+            item.count < min
+          ) {
+            min = item.count;
+            least = item;
+          }
+        }
+        return least;
+      };
+
+      const lp = findLeast(pm);
+      const lc = findLeast(cm);
+
       console.log(
-        `[Dashboard] ${periodLabel}: Top product='${tp.name}' (${tp.count}), Top category='${tc.name}' (${tc.count})`,
+        `[Dashboard] ${periodLabel}: Top product='${tp.name}' (${tp.count}), Top category='${tc.name}' (${tc.count}), Least product='${lp.name}' (${lp.count}), Least category='${lc.name}' (${lc.count})`,
       );
 
-      return { topProduct: tp, topCategory: tc };
+      return {
+        topProduct: tp,
+        topCategory: tc,
+        leastProduct: lp,
+        leastCategory: lc,
+      };
     };
 
-    const { topProduct: topProductWeekly, topCategory: topCategoryWeekly } =
-      computeTop(weeklySaleItems, "Weekly");
-    const { topProduct: topProductMonthly, topCategory: topCategoryMonthly } =
-      computeTop(monthlySaleItems, "Monthly");
-    const { topProduct: topProductYearly, topCategory: topCategoryYearly } =
-      computeTop(yearlySaleItems, "Yearly");
+    const {
+      topProduct: topProductWeekly,
+      topCategory: topCategoryWeekly,
+      leastProduct: leastProductWeekly,
+      leastCategory: leastCategoryWeekly,
+    } = computeTop(weeklySaleItems, "Weekly");
+    const {
+      topProduct: topProductMonthly,
+      topCategory: topCategoryMonthly,
+      leastProduct: leastProductMonthly,
+      leastCategory: leastCategoryMonthly,
+    } = computeTop(monthlySaleItems, "Monthly");
+    const {
+      topProduct: topProductYearly,
+      topCategory: topCategoryYearly,
+      leastProduct: leastProductYearly,
+      leastCategory: leastCategoryYearly,
+    } = computeTop(yearlySaleItems, "Yearly");
 
     // ── Daily Analytics (Mon–Sun of current week, in-memory) ───────────
     const weekStart = new Date(args.weekStartDate + "T00:00:00");
@@ -1588,10 +1670,16 @@ export const getDashboardData = query({
       },
       topProductWeekly,
       topCategoryWeekly,
+      leastProductWeekly,
+      leastCategoryWeekly,
       topProductMonthly,
       topCategoryMonthly,
+      leastProductMonthly,
+      leastCategoryMonthly,
       topProductYearly,
       topCategoryYearly,
+      leastProductYearly,
+      leastCategoryYearly,
       dailyAnalytics,
       weeklyAnalytics,
       monthlyAnalytics,
@@ -1847,9 +1935,12 @@ export const getMonthlyReportData = query({
         .collect(),
     ]);
 
+    const activeSales = salesRaw.filter((sale) => !sale.deletedAt);
+    const activeExpenses = expensesRaw.filter((expense) => !expense.deletedAt);
+
     // Fetch line items for each sale (parallel)
     const salesWithItems = await Promise.all(
-      salesRaw.map(async (sale) => {
+      activeSales.map(async (sale) => {
         const items = await ctx.db
           .query("saleItems")
           .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
@@ -1873,7 +1964,7 @@ export const getMonthlyReportData = query({
 
     // Fetch line items for each expense (parallel)
     const expensesWithItems = await Promise.all(
-      expensesRaw.map(async (expense) => {
+      activeExpenses.map(async (expense) => {
         const items = await ctx.db
           .query("expenseItems")
           .withIndex("by_expense", (q) => q.eq("expenseId", expense._id))
@@ -1895,20 +1986,80 @@ export const getMonthlyReportData = query({
       }),
     );
 
+    const dailyTotals = new Map<string, { income: number; expense: number }>();
+
+    for (const sale of activeSales) {
+      const existing = dailyTotals.get(sale.date) ?? { income: 0, expense: 0 };
+      existing.income += sale.totalAmount;
+      dailyTotals.set(sale.date, existing);
+    }
+
+    for (const expense of activeExpenses) {
+      const existing = dailyTotals.get(expense.date) ?? {
+        income: 0,
+        expense: 0,
+      };
+      existing.expense += expense.totalAmount;
+      dailyTotals.set(expense.date, existing);
+    }
+
+    const daysInMonth = new Date(args.year, args.month, 0).getDate();
+    const dailyChart = Array.from({ length: daysInMonth }, (_, index) => {
+      const day = index + 1;
+      const dateKey = `${args.year}-${mm}-${String(day).padStart(2, "0")}`;
+      const entry = dailyTotals.get(dateKey) ?? { income: 0, expense: 0 };
+      return {
+        label: String(day),
+        income: entry.income,
+        expense: entry.expense,
+        profit: entry.income - entry.expense,
+      };
+    });
+
+    const weeklyMap = new Map<number, { income: number; expense: number }>();
+    for (let index = 0; index < dailyChart.length; index += 1) {
+      const bucket = Math.floor(index / 7) + 1;
+      const existing = weeklyMap.get(bucket) ?? { income: 0, expense: 0 };
+      existing.income += dailyChart[index].income;
+      existing.expense += dailyChart[index].expense;
+      weeklyMap.set(bucket, existing);
+    }
+
+    const weeklyChart = Array.from(weeklyMap.entries()).map(
+      ([week, totals]) => ({
+        label: `Week ${week}`,
+        income: totals.income,
+        expense: totals.expense,
+        profit: totals.income - totals.expense,
+      }),
+    );
+
     return {
       month: args.month,
       year: args.year,
       sales: salesWithItems,
       expenses: expensesWithItems,
-      salesGrandTotal: salesRaw.reduce((s, r) => s + r.totalAmount, 0),
-      expensesGrandTotal: expensesRaw.reduce((s, r) => s + r.totalAmount, 0),
+      salesGrandTotal: activeSales.reduce(
+        (sum, sale) => sum + sale.totalAmount,
+        0,
+      ),
+      expensesGrandTotal: activeExpenses.reduce(
+        (sum, expense) => sum + expense.totalAmount,
+        0,
+      ),
+      totalExpenseItems: activeExpenses.reduce(
+        (sum, expense) => sum + expense.itemCount,
+        0,
+      ),
+      dailyChart,
+      weeklyChart,
     };
   },
 });
 
 //  Trash Bin
 
-const TRASH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+const TRASH_TTL_MS = 90 * 24 * 60 * 60 * 1000; // exact 90 days in milliseconds
 
 // Get all trashed transactions for a user (sorted by most recently trashed first)
 export const getTrashTransactions = query({
@@ -2039,7 +2190,7 @@ export const getTrashTransactions = query({
   },
 });
 
-// Permanently delete all expired trash records (older than 30 days)
+// Permanently delete all expired trash records (older than 90 days)
 export const purgeExpiredTrash = mutation({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {

@@ -15,6 +15,8 @@ interface FinancialSummary {
   profit: number;
   productsSold: number;
   averageTransaction: number;
+  totalExpenseItems?: number;
+  totalExpenseAmount?: number;
   topProduct?: string;
   topCategory?: string;
 }
@@ -53,6 +55,18 @@ function generatePDFHTML(
     month: "long",
     day: "numeric",
   });
+  const dashboardPoints: ReportChartPoint[] = chartData.map((point) => ({
+    label: point.day,
+    income: point.inc,
+    expense: point.exp,
+    profit: point.inc - point.exp,
+  }));
+  const incomeExpenseChartSvg = buildIncomeExpenseChart(dashboardPoints);
+  const profitTrendChartSvg = buildProfitChart(dashboardPoints);
+  const totalExpenseItems =
+    summary.totalExpenseItems ??
+    monthlyData.reduce((sum, month) => sum + month.expenseCount, 0);
+  const totalExpenseAmount = summary.totalExpenseAmount ?? summary.totalExpense;
 
   return `
 <!DOCTYPE html>
@@ -262,6 +276,34 @@ function generatePDFHTML(
     .monthly-table tr:nth-child(even) {
       background: #f9fafb;
     }
+
+    .chart-block {
+      margin: 18px 0 8px;
+    }
+
+    .chart-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1e3a5f;
+      margin-bottom: 8px;
+    }
+
+    .dashboard-chart {
+      width: 100%;
+      height: 220px;
+      border: 1px solid #dbe7f3;
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .chart-empty {
+      padding: 18px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 12px;
+      color: #6b7280;
+      background: #fff;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -296,6 +338,14 @@ function generatePDFHTML(
         <div class="summary-value">${summary.productsSold !== undefined ? summary.productsSold.toLocaleString("en-US") : "0"}</div>
       </div>
       <div class="summary-card">
+        <div class="summary-label">Total Expense Items</div>
+        <div class="summary-value">${totalExpenseItems.toLocaleString("en-US")}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Total Expense Amount</div>
+        <div class="summary-value negative">₱${(totalExpenseAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+      </div>
+      <div class="summary-card">
         <div class="summary-label">Average Transaction</div>
         <div class="summary-value">₱${summary.averageTransaction !== undefined ? summary.averageTransaction.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}</div>
       </div>
@@ -327,6 +377,18 @@ function generatePDFHTML(
     </div>
     `
     }
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Dashboard Graphs</h2>
+    <div class="chart-block">
+      <div class="chart-title">Income vs Expenses</div>
+      ${incomeExpenseChartSvg}
+    </div>
+    <div class="chart-block">
+      <div class="chart-title">Profit Trend</div>
+      ${profitTrendChartSvg}
+    </div>
   </div>
 
   <div class="section">
@@ -595,6 +657,20 @@ export interface MonthlyExpenseItem {
   date: number; // unix ms
 }
 
+export interface ReportChartPoint {
+  label: string;
+  income: number;
+  expense: number;
+  profit: number;
+}
+
+export interface MonthlyReportDashboardSummary {
+  totalExpenseItems: number;
+  totalExpenseAmount: number;
+  dailyChart: ReportChartPoint[];
+  weeklyChart: ReportChartPoint[];
+}
+
 const MONTH_NAMES = [
   "January",
   "February",
@@ -627,6 +703,90 @@ function fmt(n: number): string {
   });
 }
 
+function buildIncomeExpenseChart(points: ReportChartPoint[]): string {
+  if (!points.length) {
+    return `<div class="chart-empty">No dashboard chart data available.</div>`;
+  }
+
+  const incomeColor = "#2c527a";
+  const expenseColor = "#b91c1c";
+  const axisColor = "#d1d5db";
+  const labelColor = "#4b5563";
+  const legendColor = "#1e3a5f";
+
+  const maxValue = Math.max(
+    ...points.map((point) => Math.max(point.income, point.expense)),
+    1,
+  );
+  const chartHeight = 180;
+  const chartWidth = 560;
+  const barGroupWidth = chartWidth / points.length;
+  const barWidth = Math.max(6, barGroupWidth / 3);
+
+  const bars = points
+    .map((point, index) => {
+      const baseX = 42 + index * barGroupWidth;
+      const incomeHeight = (point.income / maxValue) * chartHeight;
+      const expenseHeight = (point.expense / maxValue) * chartHeight;
+      return `
+        <rect x="${baseX}" y="${220 - incomeHeight}" width="${barWidth}" height="${incomeHeight}" fill="${incomeColor}" rx="3" />
+        <rect x="${baseX + barWidth + 4}" y="${220 - expenseHeight}" width="${barWidth}" height="${expenseHeight}" fill="${expenseColor}" rx="3" />
+        <text x="${baseX + barWidth}" y="238" text-anchor="middle" font-size="9" fill="${labelColor}">${point.label}</text>
+      `;
+    })
+    .join("");
+
+  return `
+    <svg class="dashboard-chart" viewBox="0 0 620 250" xmlns="http://www.w3.org/2000/svg">
+      <line x1="30" y1="220" x2="595" y2="220" stroke="${axisColor}" stroke-width="1" />
+      <line x1="30" y1="30" x2="30" y2="220" stroke="${axisColor}" stroke-width="1" />
+      ${bars}
+      <rect x="430" y="18" width="12" height="12" fill="${incomeColor}" rx="2" />
+      <text x="448" y="28" font-size="11" fill="${legendColor}">Income</text>
+      <rect x="500" y="18" width="12" height="12" fill="${expenseColor}" rx="2" />
+      <text x="518" y="28" font-size="11" fill="${legendColor}">Expenses</text>
+    </svg>
+  `;
+}
+
+function buildProfitChart(points: ReportChartPoint[]): string {
+  if (!points.length) {
+    return `<div class="chart-empty">No dashboard chart data available.</div>`;
+  }
+
+  const trendColor = "#2c527a";
+  const axisColor = "#d1d5db";
+  const labelColor = "#4b5563";
+
+  const maxProfit = Math.max(
+    ...points.map((point) => Math.abs(point.profit)),
+    1,
+  );
+  const linePoints = points
+    .map((point, index) => {
+      const x = 40 + (index * 540) / Math.max(points.length - 1, 1);
+      const y = 125 - (point.profit / maxProfit) * 85;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  const labels = points
+    .map((point, index) => {
+      const x = 40 + (index * 540) / Math.max(points.length - 1, 1);
+      return `<text x="${x}" y="238" text-anchor="middle" font-size="10" fill="${labelColor}">${point.label}</text>`;
+    })
+    .join("");
+
+  return `
+    <svg class="dashboard-chart" viewBox="0 0 620 250" xmlns="http://www.w3.org/2000/svg">
+      <line x1="30" y1="125" x2="595" y2="125" stroke="${axisColor}" stroke-dasharray="5 5" stroke-width="1" />
+      <line x1="30" y1="30" x2="30" y2="220" stroke="${axisColor}" stroke-width="1" />
+      <polyline fill="none" stroke="${trendColor}" stroke-width="3" points="${linePoints}" />
+      ${labels}
+    </svg>
+  `;
+}
+
 /** Generates the HTML for the Monthly Financial Report PDF. */
 function generateMonthlyReportHTML(
   ownerName: string,
@@ -635,6 +795,7 @@ function generateMonthlyReportHTML(
   year: number,
   sales: MonthlySaleItem[],
   expenses: MonthlyExpenseItem[],
+  dashboard: MonthlyReportDashboardSummary,
 ): string {
   const monthName = MONTH_NAMES[month - 1];
 
@@ -655,6 +816,26 @@ function generateMonthlyReportHTML(
     (expByWeek[wk] ??= []).push(e);
   }
   const expGrandTotal = expenses.reduce((a, e) => a + e.amount, 0);
+  const salesItemCount = sales.reduce(
+    (sum, sale) => sum + (sale.quantity || 0),
+    0,
+  );
+  const fallbackExpenseItemCount = expenses.reduce(
+    (sum, expense) => sum + (expense.quantity ?? 1),
+    0,
+  );
+  const expenseItemCount =
+    Number.isFinite(dashboard.totalExpenseItems) &&
+    dashboard.totalExpenseItems >= 0
+      ? dashboard.totalExpenseItems
+      : fallbackExpenseItemCount;
+  const expenseAmountTotal =
+    Number.isFinite(dashboard.totalExpenseAmount) &&
+    dashboard.totalExpenseAmount >= 0
+      ? dashboard.totalExpenseAmount
+      : expGrandTotal;
+  const dailyChartSvg = buildIncomeExpenseChart(dashboard.dailyChart);
+  const weeklyChartSvg = buildProfitChart(dashboard.weeklyChart);
 
   // ── Income Statement calculations ─────────────────────────────────────────
   // Aggregate actual totals per category (no hardcoding)
@@ -873,6 +1054,36 @@ function generateMonthlyReportHTML(
     margin-top:36px;border-top:1px solid #d1d5db;
     padding-top:10px;text-align:center;font-size:9.5px;color:#9ca3af;
   }
+  .dashboard-summary{
+    display:grid;
+    grid-template-columns:repeat(2,1fr);
+    gap:12px;
+    margin:16px 0 20px;
+  }
+  .dashboard-card{
+    border:1px solid #dbe7f3;
+    border-radius:12px;
+    padding:12px 14px;
+    background:#f8fbff;
+  }
+  .dashboard-label{
+    font-size:10px;
+    font-weight:bold;
+    color:#6b7280;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+    margin-bottom:5px;
+  }
+  .dashboard-value{
+    font-size:16px;
+    font-weight:bold;
+    color:#1e3a5f;
+  }
+  .dashboard-value.expense{color:#b91c1c;}
+  .chart-block{margin:18px 0 8px;}
+  .chart-title{font-size:12px;font-weight:bold;color:#1e3a5f;margin-bottom:8px;}
+  .dashboard-chart{width:100%;height:220px;border:1px solid #dbe7f3;border-radius:12px;background:#fff;}
+  .chart-empty{padding:18px;border:1px dashed #cbd5e1;border-radius:12px;color:#6b7280;background:#fff;}
 </style>
 </head>
 <body>
@@ -930,6 +1141,37 @@ ${
   </tfoot>
 </table>`
 }
+
+<div class="page-break"></div>
+<div class="sec-heading" style="margin-top:28px;">Dashboard Snapshot</div>
+<div class="dashboard-summary">
+  <div class="dashboard-card">
+    <div class="dashboard-label">Total Number of Sale Items</div>
+    <div class="dashboard-value">${salesItemCount.toLocaleString("en-US")}</div>
+  </div>
+  <div class="dashboard-card">
+    <div class="dashboard-label">Total Amount of Sales</div>
+    <div class="dashboard-value">₱${fmt(salesGrandTotal)}</div>
+  </div>
+  <div class="dashboard-card">
+    <div class="dashboard-label">Total Number of Expense Items</div>
+    <div class="dashboard-value">${expenseItemCount.toLocaleString("en-US")}</div>
+  </div>
+  <div class="dashboard-card">
+    <div class="dashboard-label">Total Amount of Expenses</div>
+    <div class="dashboard-value expense">₱${fmt(expenseAmountTotal)}</div>
+  </div>
+</div>
+
+<div class="chart-block">
+  <div class="chart-title">Income vs Expenses by Day</div>
+  ${dailyChartSvg}
+</div>
+
+<div class="chart-block">
+  <div class="chart-title">Weekly Profit Trend</div>
+  ${weeklyChartSvg}
+</div>
 
 <!-- ════════════════════════════════════════════════════════════
      SECTION 3 — INCOME STATEMENT
@@ -1021,6 +1263,7 @@ export async function generateMonthlyFinancialReportPDF(
   year: number,
   sales: MonthlySaleItem[],
   expenses: MonthlyExpenseItem[],
+  dashboard: MonthlyReportDashboardSummary,
 ): Promise<void> {
   if (sales.length === 0 && expenses.length === 0) {
     Alert.alert(
@@ -1038,6 +1281,7 @@ export async function generateMonthlyFinancialReportPDF(
       year,
       sales,
       expenses,
+      dashboard,
     );
 
     const { uri } = await Print.printToFileAsync({ html, base64: false });

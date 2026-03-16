@@ -30,10 +30,14 @@ export interface ExpenseItemData {
 
 export interface ExpenseData {
   userId: string;
-  items: ExpenseItemData[];
+  category: string;
+  receiptNumber: string;
+  itemCount: number;
+  totalAmount: number;
   clientTimestamp: number;
   receiptImageStorageId?: string;
   expenseDate?: string;
+  ocrText?: string;
 }
 
 interface MutationQueueContextType {
@@ -88,10 +92,14 @@ export function MutationQueueProvider({
     try {
       const result = await createExpenseMutation({
         userId: data.userId as any,
-        items: data.items as any,
+        category: data.category,
+        receiptNumber: data.receiptNumber,
+        itemCount: data.itemCount,
+        totalAmount: data.totalAmount,
         clientTimestamp: data.clientTimestamp,
         receiptImageStorageId: data.receiptImageStorageId as any,
         expenseDate: data.expenseDate,
+        ocrText: data.ocrText,
       });
       queryClient.invalidateQueries({ queryKey: ["expenses"] });
       queryClient.invalidateQueries({ queryKey: ["transactions"] });

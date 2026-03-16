@@ -3,6 +3,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { useMutation } from "convex/react";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
@@ -12,1478 +14,617 @@ import {
   ArrowLeft,
   Calendar,
   Camera,
-  Lock,
-  Plus,
+  Image as ImageIcon,
+  RotateCcw,
   Trash2,
   X,
 } from "lucide-react-native";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import { SyncBadge } from "../components/SyncBadge";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { api } from "../../convex/_generated/api";
 import { useAuth } from "../context/AuthContext";
 import { useMutationQueue } from "../providers/MutationQueueProvider";
 import { useOffline } from "../providers/OfflineProvider";
-import {
-  categorizeItemForBusiness,
-  getBusinessTypePromptContext,
-  getCategoriesForBusinessType,
-} from "../utils/categorizationEngine";
 
 const COLORS = {
   primaryBlue: "#3b6ea5",
   lightBlueBg: "#f0f6fc",
   white: "#ffffff",
   textDark: "#1f2937",
-  textGray: "#9ca3af",
+  textGray: "#6b7280",
+  textLight: "#9ca3af",
+  success: "#10b981",
+  warning: "#f59e0b",
+  border: "#d7e3f1",
 };
 
-// EXPENSE_CATEGORIES is now derived dynamically per business type (see getCategoriesForBusinessType).
+const DEFAULT_EXPENSE_CATEGORY = "Store Supplies and Materials";
 
-// Google Gemini Vision API - round-robin across models and API keys
-const GEMINI_API_KEYS = [
-  process.env.EXPO_PUBLIC_GEMINI_API_KEY_1!,
-  process.env.EXPO_PUBLIC_GEMINI_API_KEY_2!,
-  process.env.EXPO_PUBLIC_GEMINI_API_KEY_3!,
-];
-let geminiApiKeyIndex = 0; // Round-robin counter for API keys
+const RECEIPT_CATEGORIES = [
+  "Store Supplies and Materials",
+  "Utilities",
+  "Transportation",
+] as const;
 
-// Dedicated API keys for AI auto-categorization — isolated from the OCR quota
-const GEMINI_CATEGORY_KEYS = [
-  process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_1!,
-  process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_2!,
-  process.env.EXPO_PUBLIC_GEMINI_CATEGORY_KEY_3!,
-];
-
-const GOOGLE_AI_MODELS = [
-  "gemini-3-pro-preview",
-  "gemini-2.5-pro",
-  "gemini-flash-latest",
+const DEFAULT_GEMINI_MODELS = [
   "gemini-2.5-flash",
-  "gemini-2.0-flash",
-  "gemini-flash-lite-latest",
-  "gemini-2.5-flash-lite",
-];
-// Round-robin counter — persists across scans within session
-let googleModelIndex = 0;
-
-// ── AI auto-categorization settings ────────────────────────────────────────
-/** ms to wait after the user stops typing before calling the AI */
-const AI_DEBOUNCE_MS = 1500;
-/** minimum ms between successive AI category calls (rate-limit guard) */
-const AI_RATE_LIMIT_MS = 3000;
-/** minimum title length before consulting AI */
-const AI_MIN_TITLE_LENGTH = 4;
-/** Fallback models to try for categorization (in order of preference) */
-const AI_CATEGORY_MODELS = [
-  "gemini-flash-lite-latest",
-  "gemini-2.5-flash-lite",
-  "gemini-2.0-flash",
   "gemini-flash-latest",
-  "gemini-2.5-flash",
+  "gemini-2.0-flash",
 ];
-/** Timeout for AI categorization requests (ms) */
-const AI_CATEGORY_TIMEOUT_MS = 10000;
 
-/**
- * Check if text contains explicit General terms (misc, other, etc.)
- * that should always be categorized as "General" without AI.
- */
-function isExplicitGeneralTerm(text: string): boolean {
-  const lower = text.toLowerCase();
-  const explicitTerms = [
-    "misc",
-    "miscellaneous",
-    "misc fee",
-    "miscellaneous fee",
-    "other",
-    "others",
-    "sundry",
-  ];
+const GEMINI_MODELS = (
+  process.env.EXPO_PUBLIC_GEMINI_MODELS
+    ? process.env.EXPO_PUBLIC_GEMINI_MODELS.split(",")
+    : DEFAULT_GEMINI_MODELS
+)
+  .map((value) => value.trim())
+  .filter((value): value is string => value.length > 0);
 
-  // Check for whole word matches
-  return explicitTerms.some((term) => {
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp(`\\b${escaped}\\b`, "i");
-    return regex.test(lower);
+const GEMINI_API_KEYS = Array.from(
+  new Set(
+    [
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY_1,
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY_2,
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY_3,
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY_4,
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY_5,
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY_6,
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY,
+    ]
+      .map((value) => value?.trim())
+      .filter((value): value is string => Boolean(value)),
+  ),
+);
+
+const GEMINI_DEBUG_ENABLED =
+  __DEV__ || process.env.EXPO_PUBLIC_GEMINI_DEBUG === "true";
+
+let geminiModelCursor = 0;
+let geminiKeyCursor = 0;
+
+function geminiLog(level: "info" | "warn" | "error", ...args: unknown[]) {
+  if (!GEMINI_DEBUG_ENABLED) {
+    return;
+  }
+
+  const prefix = "[AddExpenses][Gemini]";
+  if (level === "error") {
+    console.error(prefix, ...args);
+    return;
+  }
+  if (level === "warn") {
+    console.warn(prefix, ...args);
+    return;
+  }
+  console.info(prefix, ...args);
+}
+
+function rotateFromCursor<T>(values: T[], cursor: number): T[] {
+  if (!values.length) {
+    return [];
+  }
+
+  const start = ((cursor % values.length) + values.length) % values.length;
+  return [...values.slice(start), ...values.slice(0, start)];
+}
+
+const DRAFT_STORAGE_KEY = "bizwise_expenses_receipt_draft";
+
+interface ReceiptSummary {
+  category: (typeof RECEIPT_CATEGORIES)[number];
+  totalItems: number;
+  totalAmount: number;
+}
+
+function formatDateLabel(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
   });
 }
 
-interface ExpenseItem {
-  id: string;
-  category: string;
-  /** Tracks who set the category: local keyword engine, AI, or user. */
-  categorySource?: "local" | "ai" | "user";
-  title: string;
-  amount: string;
-  quantity: string;
-  total: string;
-  /** True when the item was populated by OCR / AI scan. Fields are read-only. */
-  isOcrSource?: boolean;
+function buildExpenseDate(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function extractJsonObject(text: string): Record<string, unknown> | null {
+  const cleaned = text
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) {
+    return null;
+  }
+
+  const rawJson = match[0];
+
+  try {
+    return JSON.parse(rawJson);
+  } catch {
+    // Try a lenient pass for common model formatting quirks.
+    const normalized = rawJson
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/,\s*([}\]])/g, "$1")
+      .replace(/([{,]\s*)'([^']+?)'\s*:/g, '$1"$2":')
+      .replace(/:\s*'([^']*?)'/g, ': "$1"');
+
+    try {
+      return JSON.parse(normalized);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function parseNumericValue(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const cleaned = value
+    .replace(/,/g, "")
+    .replace(/[₱Pp]\s*/g, "")
+    .replace(/[^\d.-]/g, "");
+
+  if (!cleaned) {
+    return null;
+  }
+
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function collectCandidateTexts(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const data = payload as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+
+  const texts: string[] = [];
+  for (const candidate of data.candidates ?? []) {
+    for (const part of candidate.content?.parts ?? []) {
+      if (typeof part.text === "string" && part.text.trim().length > 0) {
+        texts.push(part.text.trim());
+      }
+    }
+  }
+
+  return texts;
+}
+
+function normalizeReceiptSummary(
+  payload: Record<string, unknown>,
+): ReceiptSummary | null {
+  const category = typeof payload.category === "string" ? payload.category : "";
+  const normalizedCategory = RECEIPT_CATEGORIES.find(
+    (item) => item.toLowerCase() === category.toLowerCase(),
+  );
+  const totalItems = parseNumericValue(
+    payload.totalItems ?? payload.itemCount ?? payload.items,
+  );
+  const totalAmount = parseNumericValue(
+    payload.totalAmount ??
+      payload.amount ??
+      payload.total ??
+      payload.grandTotal ??
+      payload.finalTotal,
+  );
+
+  if (totalItems === null || totalAmount === null) {
+    return null;
+  }
+
+  return {
+    category: normalizedCategory ?? DEFAULT_EXPENSE_CATEGORY,
+    totalItems: Math.max(1, Math.round(totalItems)),
+    totalAmount: Number(totalAmount.toFixed(2)),
+  };
 }
 
 export default function AddExpenseScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const { user } = useAuth();
   const { isOnline } = useOffline();
   const { createExpense } = useMutationQueue();
+  const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
-  // Dynamic categories based on the signed-in user's business type
-  const expenseCategories = getCategoriesForBusinessType(user?.businessType);
-
-  const [expenses, setExpenses] = useState<ExpenseItem[]>([
-    {
-      id: "1",
-      category: "",
-      title: "",
-      amount: "",
-      quantity: "",
-      total: "0.00",
-    },
-  ]);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [showScanAnimation, setShowScanAnimation] = useState(false);
-  const [scanComplete, setScanComplete] = useState(false);
-  const [scanError, setScanError] = useState(false);
-  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [customCategory, setCustomCategory] = useState("");
-  const [processingMessage, setProcessingMessage] = useState("");
-  const [showDatePicker, setShowDatePicker] = useState(false);
-
-  // Date state - default to today
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const [selectedDate, setSelectedDate] = useState<Date>(today);
-
-  const lottieRef = useRef<LottieView>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-
-  // ── AI category refs (no re-renders on mutation) ──────────────────────────
-  /** In-memory cache: "businessType::title" → category. Avoids duplicate AI calls. */
-  const aiCategoryCache = useRef<Map<string, string>>(new Map());
-  /** Per-item debounce timers keyed by expense item id. */
-  const categorizationTimers = useRef<
-    Map<string, ReturnType<typeof setTimeout>>
-  >(new Map());
-  /** Timestamp of the last AI category call (rate-limiting). */
-  const lastAICallTimestamp = useRef<number>(0);
-  /** Item IDs currently waiting for an AI category response. */
-  const [categorizingIds, setCategorizingIds] = useState<Set<string>>(
-    new Set(),
+  const [receiptSummary, setReceiptSummary] = useState<ReceiptSummary | null>(
+    null,
   );
-
-  const EXPENSE_CACHE_KEY = "bizwise_expense_cache";
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return today;
+  });
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    const loadSavedExpenses = async () => {
+    const loadDraft = async () => {
       try {
-        const savedData = await AsyncStorage.getItem(EXPENSE_CACHE_KEY);
-        if (savedData) {
-          const parsed = JSON.parse(savedData);
-          if (parsed.expenses && parsed.expenses.length > 0) {
-            setExpenses(parsed.expenses);
-          }
-          if (parsed.selectedDate) {
-            setSelectedDate(new Date(parsed.selectedDate));
-          }
+        const raw = await AsyncStorage.getItem(DRAFT_STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+
+        const parsed = JSON.parse(raw);
+        if (parsed.capturedImage) {
+          setCapturedImage(parsed.capturedImage);
+        }
+        if (parsed.receiptSummary) {
+          setReceiptSummary(parsed.receiptSummary);
+        }
+        if (parsed.selectedDate) {
+          setSelectedDate(new Date(parsed.selectedDate));
         }
       } catch (error) {
-        console.error("Error loading saved expenses:", error);
+        console.error("Error loading Expenses draft:", error);
       }
     };
-    loadSavedExpenses();
+
+    loadDraft();
   }, []);
 
   useEffect(() => {
-    const saveExpenses = async () => {
+    const saveDraft = async () => {
       try {
         await AsyncStorage.setItem(
-          EXPENSE_CACHE_KEY,
+          DRAFT_STORAGE_KEY,
           JSON.stringify({
-            expenses,
+            capturedImage,
+            receiptSummary,
             selectedDate: selectedDate.toISOString(),
           }),
         );
       } catch (error) {
-        console.error("Error saving expenses:", error);
+        console.error("Error saving Expenses draft:", error);
       }
     };
-    saveExpenses();
-  }, [expenses, selectedDate]);
 
-  const clearSavedExpenses = async () => {
+    saveDraft();
+  }, [capturedImage, receiptSummary, selectedDate]);
+
+  const clearDraft = async () => {
     try {
-      await AsyncStorage.removeItem(EXPENSE_CACHE_KEY);
+      await AsyncStorage.removeItem(DRAFT_STORAGE_KEY);
     } catch (error) {
-      console.error("Error clearing saved expenses:", error);
+      console.error("Error clearing Expenses draft:", error);
     }
   };
 
-  const getCurrentDate = () => {
-    return selectedDate.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
+  const resetScreen = async () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    setCapturedImage(null);
+    setReceiptSummary(null);
+    setSelectedDate(today);
+    await clearDraft();
+  };
+
+  const uploadReceiptImage = async (imageUri: string) => {
+    const uploadUrl = await generateUploadUrl();
+    const response = await fetch(imageUri);
+    const blob = await response.blob();
+    const uploadResponse = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": blob.type || "image/jpeg" },
+      body: blob,
     });
+
+    const payload = await uploadResponse.json();
+    return payload.storageId as string;
   };
 
-  // Cycling processing messages
-  const PROCESSING_MESSAGES = [
-    "Sending image to be processed...",
-    "Please wait a moment...",
-    "Please don't cancel, it will waste resources...",
-    "Please be patient...",
-    "The server is taking a bit longer...",
-    "Almost there...",
-  ];
-
-  useEffect(() => {
-    let messageIndex = 0;
-    let interval: ReturnType<typeof setInterval>;
-
-    if (isProcessing && showScanAnimation) {
-      setProcessingMessage(PROCESSING_MESSAGES[0]);
-      interval = setInterval(() => {
-        messageIndex = (messageIndex + 1) % PROCESSING_MESSAGES.length;
-        setProcessingMessage(PROCESSING_MESSAGES[messageIndex]);
-      }, 4000); // Change message every 4 seconds
+  const parseReceiptWithGemini = async (imageUri: string) => {
+    if (!GEMINI_API_KEYS.length) {
+      throw new Error("Gemini API keys are not configured.");
+    }
+    if (!GEMINI_MODELS.length) {
+      throw new Error("Gemini models are not configured.");
     }
 
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isProcessing, showScanAnimation]);
-
-  const addExpenseItem = () => {
-    const newItem: ExpenseItem = {
-      id: Date.now().toString(),
-      category: "",
-      title: "",
-      amount: "",
-      quantity: "",
-      total: "0.00",
-    };
-    setExpenses([...expenses, newItem]);
-  };
-
-  const removeExpenseItem = (id: string) => {
-    if (expenses.length > 1) {
-      // Cancel any pending AI categorization timer for the removed item
-      const existing = categorizationTimers.current.get(id);
-      if (existing) clearTimeout(existing);
-      categorizationTimers.current.delete(id);
-      setCategorizingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      setExpenses(expenses.filter((item) => item.id !== id));
-    }
-  };
-
-  const openCategoryPicker = (itemId: string) => {
-    setSelectedItemId(itemId);
-    setCustomCategory("");
-    setShowCategoryPicker(true);
-  };
-
-  const selectCategory = (category: string) => {
-    if (selectedItemId) {
-      // Mark as user-chosen so AI never overrides it
-      setExpenses((prev) =>
-        prev.map((item) =>
-          item.id === selectedItemId
-            ? { ...item, category, categorySource: "user" as const }
-            : item,
-        ),
-      );
-    }
-    setShowCategoryPicker(false);
-    setSelectedItemId(null);
-    setCustomCategory("");
-  };
-
-  const selectCustomCategory = () => {
-    if (customCategory.trim() && selectedItemId) {
-      const cat = customCategory.trim();
-      setExpenses((prev) =>
-        prev.map((item) =>
-          item.id === selectedItemId
-            ? { ...item, category: cat, categorySource: "user" as const }
-            : item,
-        ),
-      );
-      setShowCategoryPicker(false);
-      setSelectedItemId(null);
-      setCustomCategory("");
-    }
-  };
-
-  // ── AI-powered category fallback ────────────────────────────────────────────
-  /**
-   * Calls Gemini with a minimal prompt (~100 tokens in / ~10 tokens out) to
-   * classify a single expense title. Only fires when the local keyword engine
-   * returned "General". Results are cached in-memory so the same title never
-   * triggers a second network call within a session.
-   *
-   * Includes model fallback cycling and robust error handling to prevent
-   * stuck loading states.
-   */
-  const fetchAICategoryForItem = async (id: string, title: string) => {
-    const trimmed = title.trim();
-    if (trimmed.length < AI_MIN_TITLE_LENGTH) {
-      console.log(`[AI Category] Title too short: "${trimmed}"`);
-      return;
-    }
-
-    const businessType = user?.businessType;
-    const cacheKey = `${businessType ?? "general"}::${trimmed.toLowerCase()}`;
-    console.log(`[AI Category] 🤖 Starting categorization for "${trimmed}"`);
-
-    // 1. Serve from in-memory cache (free, instant)
-    if (aiCategoryCache.current.has(cacheKey)) {
-      const cached = aiCategoryCache.current.get(cacheKey)!;
-      console.log(`[AI Category] ✓ Cache hit: "${cached}"`);
-      setExpenses((prev) =>
-        prev.map((item) =>
-          item.id === id && item.categorySource !== "user"
-            ? { ...item, category: cached, categorySource: "ai" }
-            : item,
-        ),
-      );
-      setCategorizingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      return;
-    }
-
-    // 2. Rate-limit: if a call fired too recently, reschedule and wait
-    const now = Date.now();
-    const elapsed = now - lastAICallTimestamp.current;
-    if (elapsed < AI_RATE_LIMIT_MS) {
-      const retry = AI_RATE_LIMIT_MS - elapsed;
-      console.log(`[AI Category] Rate limited, retrying in ${retry}ms`);
-      const timer = setTimeout(() => fetchAICategoryForItem(id, title), retry);
-      categorizationTimers.current.set(id, timer);
-      return;
-    }
-
-    // 3. Mark item as loading and fire the call
-    setCategorizingIds((prev) => new Set(prev).add(id));
-    lastAICallTimestamp.current = Date.now();
-
-    // Helper to clear loading state
-    const clearLoadingState = () => {
-      setCategorizingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    };
-
-    try {
-      const categories = getCategoriesForBusinessType(businessType);
-      const btLabel = businessType
-        ? `for a ${businessType} business in the Philippines`
-        : "for a small business in the Philippines";
-
-      const prompt =
-        `You are an expense categorizer ${btLabel}.\n` +
-        `For the expense item "${trimmed}", choose the single best-fitting category:\n` +
-        `${categories.join(", ")}\n\n` +
-        `Reply with ONLY the exact category name from the list. No explanations.`;
-
-      // Try each model with each API key until one succeeds
-      let lastError: any = null;
-      const totalAttempts =
-        AI_CATEGORY_MODELS.length * GEMINI_CATEGORY_KEYS.length;
-      let attemptCount = 0;
-
-      for (
-        let modelIndex = 0;
-        modelIndex < AI_CATEGORY_MODELS.length;
-        modelIndex++
-      ) {
-        const model = AI_CATEGORY_MODELS[modelIndex];
-
-        // Try each API key for this model
-        for (
-          let keyIndex = 0;
-          keyIndex < GEMINI_CATEGORY_KEYS.length;
-          keyIndex++
-        ) {
-          attemptCount++;
-          const apiKey = GEMINI_CATEGORY_KEYS[keyIndex];
-          const keyNumber = keyIndex + 1;
-
-          console.log(
-            `[AI Category] Attempt ${attemptCount}/${totalAttempts}: ${model} with API Key #${keyNumber}`,
-          );
-
-          try {
-            // Create fetch with timeout
-            const controller = new AbortController();
-            const timeoutId = setTimeout(
-              () => controller.abort(),
-              AI_CATEGORY_TIMEOUT_MS,
-            );
-
-            const response = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  contents: [{ parts: [{ text: prompt }] }],
-                  generationConfig: { maxOutputTokens: 15, temperature: 0 },
-                }),
-                signal: controller.signal,
-              },
-            );
-
-            clearTimeout(timeoutId);
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              console.warn(
-                `[AI Category] ${model} + Key #${keyNumber} → HTTP ${response.status}`,
-              );
-              lastError = new Error(`HTTP ${response.status}: ${errorText}`);
-              continue; // Try next key or model
-            }
-
-            const data = await response.json();
-            const raw: string =
-              data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-
-            console.log(
-              `[AI Category] ${model} + Key #${keyNumber} response: "${raw}"`,
-            );
-
-            // Validate: response must exactly match one of the allowed categories
-            const matched = categories.find(
-              (c) => c.toLowerCase() === raw.toLowerCase(),
-            );
-
-            if (matched && matched !== "General") {
-              console.log(
-                `[AI Category] ✓ SUCCESS: ${model} + Key #${keyNumber} → "${matched}"`,
-              );
-              aiCategoryCache.current.set(cacheKey, matched);
-              setExpenses((prev) =>
-                prev.map((item) =>
-                  item.id === id && item.categorySource !== "user"
-                    ? { ...item, category: matched, categorySource: "ai" }
-                    : item,
-                ),
-              );
-              clearLoadingState();
-              return; // Success! Exit function
-            } else {
-              console.warn(
-                `[AI Category] ${model} + Key #${keyNumber} returned invalid/General: "${raw}"`,
-              );
-              lastError = new Error(`Invalid category response: ${raw}`);
-              continue; // Try next key or model
-            }
-          } catch (modelError: any) {
-            console.warn(
-              `[AI Category] ${model} + Key #${keyNumber} error:`,
-              modelError.message,
-            );
-            lastError = modelError;
-            continue; // Try next key or model
-          }
-        }
-      }
-
-      // All model+key combinations failed
-      console.error(
-        `[AI Category] ✗ All ${totalAttempts} attempts failed (${AI_CATEGORY_MODELS.length} models × ${GEMINI_CATEGORY_KEYS.length} keys) for "${trimmed}"`,
-        lastError,
-      );
-    } catch (err: any) {
-      console.error("[AI Category] ✗ Fatal error:", err.message);
-    } finally {
-      // ALWAYS clear loading state, even if all models fail
-      clearLoadingState();
-      console.log(`[AI Category] Loading state cleared for "${trimmed}"`);
-    }
-  };
-
-  /**
-   * Schedules an AI category call for `id` after AI_DEBOUNCE_MS of inactivity.
-   * Shows "Categorizing..." immediately so the user gets instant feedback.
-   * Cancels any previously scheduled call for the same item (standard debounce).
-   */
-  const triggerAICategoryDebounced = (id: string, title: string) => {
-    const existing = categorizationTimers.current.get(id);
-    if (existing) clearTimeout(existing);
-
-    if (title.trim().length < AI_MIN_TITLE_LENGTH) {
-      // Title is too short — make sure the loading indicator is cleared
-      setCategorizingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      return;
-    }
-
-    // Show "Categorizing..." straight away (debounce + API latency = long wait)
-    setCategorizingIds((prev) => new Set(prev).add(id));
-
-    const timer = setTimeout(() => {
-      categorizationTimers.current.delete(id);
-      fetchAICategoryForItem(id, title);
-    }, AI_DEBOUNCE_MS);
-
-    categorizationTimers.current.set(id, timer);
-  };
-
-  const updateExpenseItem = (
-    id: string,
-    field: keyof ExpenseItem,
-    value: string,
-  ) => {
-    // ── Pre-compute the AI-trigger decision from the current state snapshot ──
-    // This must run synchronously before setExpenses so we can act on the
-    // result afterwards without relying on side effects inside the mapper.
-    let shouldTriggerAI = false;
-
-    if (field === "title") {
-      const trimmed = value.trim();
-      const currentItem = expenses.find((item) => item.id === id);
-
-      if (currentItem && !currentItem.isOcrSource) {
-        if (
-          trimmed.length >= AI_MIN_TITLE_LENGTH &&
-          currentItem.categorySource !== "user"
-        ) {
-          const localCategory = categorizeItemForBusiness(
-            trimmed,
-            user?.businessType,
-          );
-          console.log(
-            `[Add Expense] Local categorization: "${localCategory}" | Explicit General: ${isExplicitGeneralTerm(trimmed)}`,
-          );
-          // Trigger AI only if no match found AND not an explicit General term
-          shouldTriggerAI =
-            localCategory === "General" && !isExplicitGeneralTerm(trimmed);
-          console.log(`[Add Expense] Should trigger AI: ${shouldTriggerAI}`);
-        }
-
-        // If AI won't fire, cancel any pending timer and clear the spinner
-        if (!shouldTriggerAI) {
-          const existing = categorizationTimers.current.get(id);
-          if (existing) {
-            clearTimeout(existing);
-            categorizationTimers.current.delete(id);
-          }
-          setCategorizingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-        }
-      }
-    }
-
-    // ── Apply the state update via functional updater (avoids stale closure) ─
-    setExpenses((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          // Prevent editing locked OCR fields (category, amount, quantity)
-          if (
-            item.isOcrSource &&
-            (field === "category" || field === "amount" || field === "quantity")
-          ) {
-            return item;
-          }
-
-          const updated = { ...item, [field]: value };
-
-          // Recalculate total when amount or quantity changes.
-          // For fractional quantities (< 1, e.g. 0.25 kg), the amount entered
-          // is already the total cost for that weight — keep it as-is.
-          // For whole-number quantities (>= 1), total = amount × quantity.
-          if (field === "amount" || field === "quantity") {
-            const amount =
-              parseFloat(field === "amount" ? value : item.amount) || 0;
-            const qty =
-              parseFloat(field === "quantity" ? value : item.quantity) || 1;
-            updated.total =
-              qty < 1 ? amount.toFixed(2) : (amount * qty).toFixed(2);
-          }
-
-          // Auto-categorize when the title changes
-          if (field === "title") {
-            const trimmed = value.trim();
-            if (trimmed.length >= 3) {
-              const localCategory = categorizeItemForBusiness(
-                trimmed,
-                user?.businessType,
-              );
-              const isExplicitGeneral = isExplicitGeneralTerm(trimmed);
-              console.log(
-                `[Add Expense] Title "${trimmed}" → Category: "${localCategory}" | Explicit General: ${isExplicitGeneral}`,
-              );
-
-              if (localCategory !== "General" || isExplicitGeneral) {
-                // Solid local match (specific category or explicit General term)
-                console.log(
-                  `[Add Expense] ✓ Using local category: "${localCategory}"`,
-                );
-                updated.category = localCategory;
-                updated.categorySource = "local";
-              } else if (item.categorySource !== "user") {
-                // Local engine gave up (fallback General) — AI will fill in
-                updated.category = "";
-                updated.categorySource = undefined;
-              }
-            } else if (item.categorySource !== "user") {
-              // Title too short — clear so we don't show a stale category
-              updated.category = "";
-              updated.categorySource = undefined;
-            }
-          }
-
-          return updated;
-        }
-        return item;
-      }),
+    geminiLog(
+      "info",
+      `Starting receipt parse with ${GEMINI_API_KEYS.length} key(s) and ${GEMINI_MODELS.length} model(s).`,
+      `Key cursor=${geminiKeyCursor}, Model cursor=${geminiModelCursor}`,
     );
 
-    // ── Kick off the debounced AI call after the state update ────────────
-    if (shouldTriggerAI) {
-      triggerAICategoryDebounced(id, value);
-    }
-  };
+    const base64Image = await FileSystem.readAsStringAsync(imageUri, {
+      encoding: "base64",
+    });
 
-  const handleSave = async () => {
-    // Validate expenses
-    const validExpenses = expenses.filter(
-      (exp) => exp.title.trim() && exp.amount && parseFloat(exp.amount) > 0,
-    );
+    const prompt = `Analyze this receipt image and return ONLY a JSON object.
 
-    if (validExpenses.length === 0) {
-      Alert.alert(
-        "Validation Error",
-        "Please add at least one expense with a title and amount.",
-      );
-      return;
-    }
+Required JSON shape:
+{
+  "category": "${RECEIPT_CATEGORIES[0]} | ${RECEIPT_CATEGORIES[1]} | ${RECEIPT_CATEGORIES[2]}",
+  "totalItems": 0,
+  "totalAmount": 0
+}
 
-    // Sum using the already-computed total per line item (qty × amount or as-is for fractional qty)
-    const total = validExpenses.reduce(
-      (sum, exp) => sum + parseFloat(exp.total || "0"),
-      0,
-    );
+Rules:
+- category must be exactly one of the allowed categories in the JSON shape.
+- Use "Utilities" for utility, telecom, internet, water, electricity, or gas bills.
+- Use "Transportation" for fares, fuel, tolls, delivery, shipping, or logistics expenses.
+- Use "Store Supplies and Materials" for every other business purchase.
+- totalItems must be the total number of purchased items. Sum quantities when visible. If quantities are not visible, count the purchased line items.
+- totalAmount must be the final receipt total as a number with up to 2 decimals.
+- Return raw JSON only. No markdown. No code fences. No extra text.`;
 
-    Alert.alert(
-      "Save Expenses",
-      `Total: ₱${total.toFixed(2)}\n\nSave ${validExpenses.length} expense(s)?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Save",
-          onPress: async () => {
-            setIsSaving(true);
-            try {
-              // Note: Receipt images are only used for OCR, not stored in Convex to save storage
-              // Save all expenses as a single grouped transaction
-              const items = validExpenses.map((expense) => ({
-                category: expense.category || "General",
-                title: expense.title,
-                amount: parseFloat(expense.amount),
-                quantity: parseFloat(expense.quantity) || 1,
-              }));
+    let lastError: Error | null = null;
 
-              if (!isOnline) {
-                Alert.alert(
-                  "Offline",
-                  "You need an internet connection to save expenses. Please try again when you're back online.",
-                  [{ text: "OK" }],
-                );
-                setIsSaving(false);
-                return;
-              }
+    const orderedModels = rotateFromCursor(GEMINI_MODELS, geminiModelCursor);
+    const orderedApiKeys = rotateFromCursor(GEMINI_API_KEYS, geminiKeyCursor);
+    const totalAttempts = orderedModels.length * orderedApiKeys.length;
+    let attempt = 0;
 
-              // Create expense online - use local date in YYYY-MM-DD format
-              const expenseDateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(2, "0")}`;
-              const result = await createExpense({
-                items,
-                userId: user?.userId || "",
-                clientTimestamp: Date.now(),
-                expenseDate: expenseDateStr,
-              });
+    for (const [modelOffset, model] of orderedModels.entries()) {
+      const modelIndex =
+        (geminiModelCursor + modelOffset) % GEMINI_MODELS.length;
 
-              const tempId = result.transactionId;
+      for (const [keyOffset, apiKey] of orderedApiKeys.entries()) {
+        const keyIndex = (geminiKeyCursor + keyOffset) % GEMINI_API_KEYS.length;
+        const keyLabel = `#${keyIndex + 1}`;
+        attempt += 1;
 
-              // Reset form after successful save
-              const resetToday = new Date();
-              resetToday.setHours(0, 0, 0, 0);
-              setSelectedDate(resetToday); // reset date so cache doesn't restore a stale date
-              setExpenses([
-                {
-                  id: Date.now().toString(),
-                  category: "",
-                  title: "",
-                  amount: "",
-                  quantity: "",
-                  total: "0.00",
-                },
-              ]);
-              setCapturedImage(null);
-              setScanComplete(false);
-              setScanError(false);
-              clearSavedExpenses();
-
-              // Show appropriate message based on online status
-              if (isOnline) {
-                Alert.alert(
-                  "Success",
-                  `Expenses saved successfully!\nTransaction ID: ${tempId}`,
-                  [{ text: "OK", onPress: () => router.back() }],
-                );
-              } else {
-                Alert.alert(
-                  "Saved Offline",
-                  `Transaction ID: ${tempId}\n\nExpenses saved locally and will sync when you're back online.`,
-                  [{ text: "OK", onPress: () => router.back() }],
-                );
-              }
-            } catch (error) {
-              console.error("Error saving expenses:", error);
-              Alert.alert(
-                "Error",
-                "Failed to save expenses. Please try again.",
-              );
-            } finally {
-              setIsSaving(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  // Simplified: Take photo with native crop UI
-  const handleOpenCamera = async () => {
-    try {
-      // Request camera permission
-      const permissionResult =
-        await ImagePicker.requestCameraPermissionsAsync();
-
-      if (!permissionResult.granted) {
-        Alert.alert(
-          "Permission Required",
-          "Camera permission is needed to take photos.",
+        geminiLog(
+          "info",
+          `Attempt ${attempt}/${totalAttempts}: model=${model} (index ${modelIndex + 1}) key=${keyLabel}`,
         );
-        return;
-      }
 
-      // Launch camera with built-in crop tool
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true, // Enables native crop UI
-        quality: 0.8,
-        aspect: undefined, // Free-form cropping
-      });
+        try {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      { text: prompt },
+                      {
+                        inline_data: {
+                          mime_type: "image/jpeg",
+                          data: base64Image,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  temperature: 0,
+                  maxOutputTokens: 400,
+                },
+              }),
+            },
+          );
 
-      if (!result.canceled && result.assets[0]) {
-        // User has taken and cropped the photo
-        await processWithImage(result.assets[0].uri);
+          if (!response.ok) {
+            const responseBody = await response.text();
+            geminiLog(
+              "warn",
+              `HTTP ${response.status} from model=${model} key=${keyLabel}`,
+              responseBody.slice(0, 240),
+            );
+            lastError = new Error(
+              `Gemini request failed with ${response.status} on ${model} ${keyLabel}`,
+            );
+            continue;
+          }
+
+          const data = await response.json();
+          const candidateTexts = collectCandidateTexts(data);
+          const combinedRawText = candidateTexts.join("\n");
+
+          for (const rawText of candidateTexts) {
+            const parsed = extractJsonObject(rawText);
+            const summary = parsed ? normalizeReceiptSummary(parsed) : null;
+
+            if (summary) {
+              geminiModelCursor = (modelIndex + 1) % GEMINI_MODELS.length;
+              geminiKeyCursor = (keyIndex + 1) % GEMINI_API_KEYS.length;
+              geminiLog(
+                "info",
+                `Parse success on model=${model} key=${keyLabel}.`,
+                `Next key cursor=${geminiKeyCursor}, model cursor=${geminiModelCursor}`,
+              );
+              return {
+                summary,
+                rawText,
+              };
+            }
+          }
+
+          geminiLog(
+            "warn",
+            `Invalid summary payload from model=${model} key=${keyLabel}.`,
+            combinedRawText.slice(0, 240),
+          );
+          lastError = new Error("Gemini returned an invalid receipt summary.");
+        } catch (error) {
+          geminiLog(
+            "warn",
+            `Request error on model=${model} key=${keyLabel}:`,
+            error,
+          );
+          lastError = error as Error;
+        }
       }
-    } catch (error) {
-      console.error("Error taking picture:", error);
-      Alert.alert("Error", "Failed to take picture. Please try again.");
     }
+
+    geminiModelCursor = (geminiModelCursor + 1) % GEMINI_MODELS.length;
+    geminiKeyCursor = (geminiKeyCursor + 1) % GEMINI_API_KEYS.length;
+    geminiLog(
+      "error",
+      `All ${totalAttempts} Gemini attempts failed.`,
+      `Next key cursor=${geminiKeyCursor}, model cursor=${geminiModelCursor}`,
+    );
+
+    throw lastError || new Error("Unable to scan receipt.");
   };
 
-  // Process with automatic resize
-  const processWithImage = async (imageUri: string) => {
+  const processReceiptImage = async (imageUri: string) => {
+    if (!isOnline) {
+      Alert.alert(
+        "Internet Required",
+        "An internet connection is required to scan receipts.",
+      );
+      return;
+    }
+
+    setIsScanning(true);
     try {
-      // Resize for optimal processing
       const processedImage = await ImageManipulator.manipulateAsync(
         imageUri,
-        [{ resize: { width: 1200 } }],
+        [{ resize: { width: 1400 } }],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
       );
 
+      const { summary } = await parseReceiptWithGemini(processedImage.uri);
       setCapturedImage(processedImage.uri);
-      setShowScanAnimation(true);
-      await processImageDirectly(processedImage.uri);
+      setReceiptSummary(summary);
     } catch (error) {
-      console.error("Error processing image:", error);
-      Alert.alert("Error", "Failed to process image. Please try again.");
+      console.error("Error scanning receipt:", error);
+      Alert.alert(
+        "Scan Failed",
+        "BizWise could not read that receipt. Please retake the photo or try another image.",
+      );
+    } finally {
+      setIsScanning(false);
     }
   };
 
-  // Process image directly without auto-cropping
-  const processImageDirectly = async (imageUri: string) => {
-    setIsProcessing(true);
+  const launchCamera = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        "Permission Required",
+        "Camera access is needed to scan receipts.",
+      );
+      return;
+    }
 
-    try {
-      // Process with Gemini Vision API
-      await processImageWithGeminiVision(imageUri);
-    } catch (error) {
-      console.error("Processing error:", error);
-      Alert.alert("Error", "Failed to process image. Please try again.");
-      setScanError(true);
-      setIsProcessing(false);
-      setShowScanAnimation(false);
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      await processReceiptImage(result.assets[0].uri);
     }
   };
 
-  // Process image directly with Gemini Vision API (no OCR needed)
-  const processImageWithGeminiVision = async (imageUri: string) => {
-    setIsProcessing(true);
-    setShowScanAnimation(true);
-    setScanComplete(false);
-    setScanError(false);
+  const launchPhotoLibrary = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        "Permission Required",
+        "Photo library access is needed to choose a receipt image.",
+      );
+      return;
+    }
 
-    // Create abort controller for canceling requests
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
 
+    if (!result.canceled && result.assets[0]) {
+      await processReceiptImage(result.assets[0].uri);
+    }
+  };
+
+  const handleDateChange = (_event: DateTimePickerEvent, date?: Date) => {
+    setShowDatePicker(false);
+    if (!date) {
+      return;
+    }
+
+    date.setHours(0, 0, 0, 0);
+    setSelectedDate(date);
+  };
+
+  const handleSave = async () => {
+    if (!user?.userId) {
+      Alert.alert("Login Required", "Please log in before saving expenses.");
+      return;
+    }
+
+    if (!capturedImage || !receiptSummary) {
+      Alert.alert(
+        "Scan Required",
+        "Scan a receipt first before saving expenses.",
+      );
+      return;
+    }
+
+    if (!isOnline) {
+      Alert.alert(
+        "Internet Required",
+        "An internet connection is required to save scanned expenses.",
+      );
+      return;
+    }
+
+    setIsSaving(true);
     try {
-      console.log("Processing image with Gemini Vision API...");
-
-      // Convert to base64 for Gemini API
-      const base64Image = await FileSystem.readAsStringAsync(imageUri, {
-        encoding: "base64",
+      const receiptImageStorageId = await uploadReceiptImage(capturedImage);
+      const result = await createExpense({
+        userId: user.userId,
+        category: receiptSummary.category,
+        receiptNumber: "",
+        itemCount: receiptSummary.totalItems,
+        totalAmount: receiptSummary.totalAmount,
+        receiptImageStorageId,
+        expenseDate: buildExpenseDate(selectedDate),
+        clientTimestamp: Date.now(),
+        ocrText: JSON.stringify(receiptSummary),
       });
 
-      console.log(
-        `Image size: ~${Math.round((base64Image.length * 3) / 4 / 1024)} KB`,
-      );
-
-      // Parse receipt with Gemini Vision AI
-      await parseReceiptWithGeminiVision(base64Image, signal);
+      await resetScreen();
+      Alert.alert("Expenses Saved", `Transaction ID: ${result.transactionId}`, [
+        { text: "OK", onPress: () => router.back() },
+      ]);
     } catch (error) {
-      // Check if error is from abort
-      if ((error as Error).name === "AbortError") {
-        console.log("Processing was cancelled by user");
-        return;
-      }
-
-      console.error("Gemini Vision Error:", (error as Error).message);
-      setScanError(true);
-      setIsProcessing(false);
+      console.error("Error saving scanned expense:", error);
+      Alert.alert(
+        "Save Failed",
+        "BizWise could not save that receipt. Please try again.",
+      );
     } finally {
-      setIsProcessing(false);
-      abortControllerRef.current = null;
+      setIsSaving(false);
     }
-  };
-
-  // ══════════════════════════════════════════════════════════
-  // NOTE: Simple regex parser removed — AI models handle parsing
-  // ══════════════════════════════════════════════════════════
-
-  // Receipt parsing prompt (shared between Gemini and OpenRouter)
-  const getReceiptPrompt = (text: string) => {
-    const businessContext = getBusinessTypePromptContext(user?.businessType);
-    return `You are an expert at parsing receipt text from the Philippines. Extract ONLY items that are clearly visible in the receipt.
-
-IMPORTANT: DO NOT MAKE UP, INVENT, OR HALLUCINATE ANY ITEMS. Only extract what you actually see in the text.
-
-${businessContext}
-
-For each item found, provide:
-1. title: The name of the item (clean it up, capitalize properly)
-2. amount: The unit price (number only, no currency symbol)
-3. quantity: How many were purchased (default to 1 if not specified)
-4. category: One of the available categories listed above for this business type
-
-CRITICAL RULES FOR PHILIPPINE RECEIPTS:
-- Each item appears on ONE LINE ONLY in receipts - DO NOT combine multiple lines into one item name
-- Item format is: "ITEM NAME - PRICE" or "ITEM NAME PRICE" on a SINGLE line
-- If you see text on separate lines, they are SEPARATE items, not one item
-- Many receipts are HANDWRITTEN and may not have PHP/₱ symbols
-- Amounts like "2345" or "1500" are Philippine pesos (don't divide by 100, use as-is)
-- Common price patterns: "2345" = ₱2,345.00, "150" = ₱150.00, "15.50" = ₱15.50
-- If amount has no decimal point and is 2+ digits, treat it as whole pesos
-- ONLY extract actual purchased items, NOT totals, subtotals, change, tax, VAT, discounts
-- Skip store names, addresses, dates, times, receipt numbers, cashier names
-- If you see "x2" or "x 3" or "qty: 2", that's the quantity
-- The amount should be the UNIT price, not the line total
-- For handwritten receipts, be lenient with OCR errors ("S" might be "5", "O" might be "0")
-- If unsure about category, use "General"
-- If you cannot clearly identify items, return empty array []
-- DO NOT include items that look like: TOTAL, SUBTOTAL, CHANGE, CASH, PAYMENT, TAX, VAT, DISCOUNT
-- Return ONLY valid JSON array, no markdown code blocks, no explanations, no other text
-
-Receipt text:
-"""
-${text}
-"""
-
-Return ONLY a JSON array (raw JSON, no code blocks, no markdown):
-[{"title": "Chicken Breast", "amount": 150, "quantity": 1, "category": "Raw Materials"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}]
-
-If no items found or text is unclear, return: []`;
-  };
-
-  // Extract items from AI response text
-  const extractItemsFromAIResponse = (aiResponse: string): any[] | null => {
-    const cleanedResponse = aiResponse
-      .replace(/```json\n/g, "")
-      .replace(/```\n/g, "")
-      .replace(/```/g, "")
-      .replace(/<think>[\s\S]*?<\/think>/g, "") // Remove DeepSeek thinking tags
-      .trim();
-
-    const jsonMatch = cleanedResponse.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return null;
-
-    try {
-      const items = JSON.parse(jsonMatch[0]);
-      return Array.isArray(items) ? items : null;
-    } catch {
-      return null;
-    }
-  };
-
-  // Parse receipt image directly with Gemini Vision API (no OCR step)
-  const parseReceiptWithGeminiVision = async (
-    base64Image: string,
-    signal?: AbortSignal,
-  ) => {
-    console.log("Parsing receipt with Gemini Vision...");
-
-    // Vision-optimized prompt — inject business type context
-    const businessContext = getBusinessTypePromptContext(user?.businessType);
-    const visionPrompt = `You are an expert at analyzing receipt images from the Philippines. Look at this receipt image and extract ALL items that are visible.
-
-IMPORTANT: DO NOT MAKE UP, INVENT, OR HALLUCINATE ANY ITEMS. Only extract what you can actually see in the image.
-
-${businessContext}
-
-For each item found, provide:
-1. title: The name of the item (clean it up, capitalize properly)
-2. amount: The unit price (number only, no currency symbol)
-3. quantity: How many were purchased (default to 1 if not specified)
-4. category: One of the available categories listed above for this business type
-
-MERGE DUPLICATE ITEMS:
-- If you see the SAME product name multiple times on the receipt (same item appearing on different lines), DO NOT create multiple separate items
-- Instead, combine them into ONE item with the total quantity
-- Example: If you see "Rice - ₱25" and "Rice - ₱25" on separate lines, return ONE item: {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}
-- Example: If you see "Chicken x2 - ₱150" and "Chicken x1 - ₱150", return ONE item: {"title": "Chicken", "amount": 150, "quantity": 3, "category": "Raw Materials"}
-- Only merge items that have the EXACT same name and unit price
-
-CRITICAL RULES FOR PHILIPPINE RECEIPTS:
-- Many receipts are HANDWRITTEN and may not have PHP/₱ symbols
-- Amounts like "2345" or "1500" are Philippine pesos (don't divide by 100, use as-is)
-- Common price patterns: "2345" = ₱2,345.00, "150" = ₱150.00, "15.50" = ₱15.50
-- If amount has no decimal point and is 2+ digits, treat it as whole pesos
-- ONLY extract actual purchased items, NOT totals, subtotals, change, tax, VAT, discounts
-- Skip store names, addresses, dates, times, receipt numbers, cashier names
-- If you see "x2" or "x 3" or "qty: 2", that's the quantity
-- The amount should be the UNIT price, not the line total
-- If unsure about category, use the last category in the available list (usually "General")
-- If you cannot clearly identify items, return empty array []
-- DO NOT include items that look like: TOTAL, SUBTOTAL, CHANGE, CASH, PAYMENT, TAX, VAT, DISCOUNT
-- Return ONLY valid JSON array, no markdown code blocks, no explanations, no other text
-
-Return ONLY a JSON array (raw JSON, no code blocks, no markdown):
-[{"title": "Chicken Breast", "amount": 150, "quantity": 1, "category": "Raw Materials"}, {"title": "Rice", "amount": 25, "quantity": 2, "category": "Raw Materials"}]
-
-If no items found or image is unclear, return: []`;
-
-    let items: any[] | null = null;
-
-    // Rotate through ALL Google AI Vision models
-    const startIndex = googleModelIndex;
-    for (let i = 0; i < GOOGLE_AI_MODELS.length; i++) {
-      const idx = (startIndex + i) % GOOGLE_AI_MODELS.length;
-      const model = GOOGLE_AI_MODELS[idx];
-
-      // Get current API key and rotate
-      const currentApiKey = GEMINI_API_KEYS[geminiApiKeyIndex];
-      const keyNumber = geminiApiKeyIndex + 1;
-      geminiApiKeyIndex = (geminiApiKeyIndex + 1) % GEMINI_API_KEYS.length;
-
-      try {
-        console.log(
-          `🔄 Trying Gemini Vision: ${model} (model ${idx + 1}/${GOOGLE_AI_MODELS.length}, key #${keyNumber})...`,
-        );
-
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentApiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    { text: visionPrompt },
-                    {
-                      inline_data: {
-                        mime_type: "image/jpeg",
-                        data: base64Image,
-                      },
-                    },
-                  ],
-                },
-              ],
-              generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
-            }),
-            signal: signal,
-          },
-        );
-
-        if (!response.ok) {
-          throw new Error(`${model} error: ${response.status}`);
-        }
-
-        const result = await response.json();
-        const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        items = extractItemsFromAIResponse(aiText);
-
-        if (items && items.length > 0) {
-          console.log(`✅ ${model} parsed ${items.length} items from image`);
-          // Advance rotation to NEXT model for the next scan
-          googleModelIndex = (idx + 1) % GOOGLE_AI_MODELS.length;
-          break;
-        }
-      } catch (e) {
-        if ((e as Error).name === "AbortError") throw e;
-        console.warn(`❌ ${model} failed:`, e);
-      }
-    }
-
-    // Advance rotation even if all failed
-    if (!items || items.length === 0) {
-      googleModelIndex = (startIndex + 1) % GOOGLE_AI_MODELS.length;
-    }
-
-    // Process items if any AI succeeded
-    if (items && items.length > 0) {
-      const newExpenses: ExpenseItem[] = items.map((item: any) => ({
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        // Trust AI's category from Gemini - it has the business context from the prompt
-        // Only use local categorization as fallback if AI didn't provide one
-        category:
-          item.category ||
-          categorizeItemForBusiness(item.title || "", user?.businessType) ||
-          "General",
-        title: item.title || "Unknown Item",
-        amount: parseFloat(item.amount || 0).toFixed(2),
-        quantity: (item.quantity || 1).toString(),
-        total: (parseFloat(item.amount || 0) * (item.quantity || 1)).toFixed(2),
-        isOcrSource: true, // Lock fields – scanned data must not be edited
-      }));
-
-      setExpenses(newExpenses);
-      setScanComplete(true);
-    } else {
-      console.log("All Gemini Vision models failed, showing error...");
-      setScanError(true);
-    }
-  };
-
-  // Fallback regex-based parsing (used when Gemini AI fails)
-  const parseReceiptText = (text: string) => {
-    console.log("Parsing receipt text with regex fallback:", text);
-
-    const lines = text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    const newExpenses: ExpenseItem[] = [];
-
-    // Use the business-type-aware engine for fallback categorization
-    const categorizeItem = (itemText: string): string =>
-      categorizeItemForBusiness(itemText, user?.businessType);
-
-    // Skip words - lines containing these are not items
-    const skipPatterns = [
-      /^total/i,
-      /^subtotal/i,
-      /^sub-total/i,
-      /^grand\s*total/i,
-      /^tax/i,
-      /^vat/i,
-      /^change/i,
-      /^cash/i,
-      /^payment/i,
-      /^tendered/i,
-      /^receipt/i,
-      /^thank\s*you/i,
-      /^welcome/i,
-      /^address/i,
-      /^tel/i,
-      /^date/i,
-      /^time/i,
-      /^tin/i,
-      /^vatable/i,
-      /^non-vat/i,
-      /^discount/i,
-      /^senior/i,
-      /^pwd/i,
-      /^invoice/i,
-      /^or\s*no/i,
-      /^si\s*no/i,
-      /^cashier/i,
-      /^store/i,
-      /^branch/i,
-      /^customer/i,
-      /^member/i,
-      /^points/i,
-      /^card/i,
-      /^balance/i,
-      /^amount\s*due/i,
-      /^amt/i,
-      /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/, // Date patterns
-      /^\d{1,2}:\d{2}/, // Time patterns
-    ];
-
-    // Additional patterns to skip (can appear anywhere in line)
-    const skipContainsPatterns = [
-      /total/i,
-      /subtotal/i,
-      /change/i,
-      /tendered/i,
-      /vat\s*(?:able|exempt|amount)/i,
-      /discount/i,
-      /receipt\s*(?:no|#|number)/i,
-      /invoice\s*(?:no|#|number)/i,
-      /transaction/i,
-      /thank\s*you/i,
-      /come\s*again/i,
-      /please\s*come/i,
-      /customer\s*copy/i,
-      /store\s*copy/i,
-      /\btin\b/i,
-      /serial\s*no/i,
-      /terminal/i,
-      /cashier/i,
-      /\bor\s*#/i,
-      /\bsi\s*#/i,
-    ];
-
-    const shouldSkipLine = (line: string): boolean => {
-      const trimmedLine = line.trim();
-      // Check start patterns
-      if (skipPatterns.some((pattern) => pattern.test(trimmedLine))) {
-        return true;
-      }
-      // Check contains patterns
-      if (skipContainsPatterns.some((pattern) => pattern.test(trimmedLine))) {
-        return true;
-      }
-      return false;
-    };
-
-    // Function to check if a number is likely a valid price
-    const isValidPrice = (amount: number, line: string): boolean => {
-      // Price should be positive
-      if (amount <= 0) return false;
-
-      // Prices typically have reasonable values (0.50 to 100,000)
-      if (amount < 0.5 || amount > 100000) return false;
-
-      // Skip if the line looks like a phone number (7+ consecutive digits)
-      if (/\d{7,}/.test(line.replace(/[\s\-\.]/g, ""))) return false;
-
-      // Skip if line looks like a date (e.g., 01/15/2026, 2026-01-15)
-      if (/\d{1,4}[\-\/]\d{1,2}[\-\/]\d{1,4}/.test(line)) return false;
-
-      // Skip if line looks like a time (e.g., 10:30, 14:45:00)
-      if (/\d{1,2}:\d{2}(:\d{2})?/.test(line)) return false;
-
-      // Skip if line looks like a receipt/transaction number (mostly digits, 6+ chars)
-      if (
-        /^[\d\-#]+$/.test(line.replace(/\s/g, "")) &&
-        line.replace(/\s/g, "").length >= 6
-      )
-        return false;
-
-      // Skip amounts that look like years (1900-2099)
-      if (amount >= 1900 && amount <= 2099 && Number.isInteger(amount))
-        return false;
-
-      // Skip if the number is likely a reference/ID (no decimal and very large)
-      if (amount >= 10000 && Number.isInteger(amount) && !/[₱P]/.test(line))
-        return false;
-
-      return true;
-    };
-
-    // Function to check if a title is valid
-    const isValidTitle = (title: string): boolean => {
-      if (!title || title.length < 2) return false;
-
-      // Skip if title is just numbers
-      if (/^\d+$/.test(title)) return false;
-
-      // Skip if title looks like a code/ID (mostly uppercase letters and numbers)
-      if (/^[A-Z0-9\-]{5,}$/.test(title) && !/\s/.test(title)) return false;
-
-      // Skip common non-item patterns
-      const invalidTitles = [
-        /^no\.?\s*\d/i,
-        /^ref\.?\s*\d/i,
-        /^trx\.?\s*\d/i,
-        /^#\d+/,
-        /^\d+\s*$/,
-        /^[A-Z]{1,3}\d+$/i, // Like "A123", "AB456"
-        /^pos\s/i,
-        /^terminal/i,
-        /^store\s*\d/i,
-        /^branch\s*\d/i,
-      ];
-
-      if (invalidTitles.some((pattern) => pattern.test(title))) return false;
-
-      return true;
-    };
-
-    // Enhanced pattern matching for different receipt formats
-    for (const line of lines) {
-      // Skip non-item lines
-      if (shouldSkipLine(line)) {
-        console.log("Skipping line:", line);
-        continue;
-      }
-
-      let title = "";
-      let amount = 0;
-      let quantity = 1;
-      let matched = false;
-
-      // Pattern 1: "ITEM NAME - ₱100.00 x 2" or "ITEM - ₱100.00 x2"
-      let itemMatch = line.match(
-        /^(.+?)\s*[-–]\s*[₱P]?\s*([\d,]+\.?\d*)\s*[xX×]\s*(\d+)/,
-      );
-      if (itemMatch) {
-        title = itemMatch[1].trim();
-        amount = parseFloat(itemMatch[2].replace(/,/g, ""));
-        quantity = parseInt(itemMatch[3]);
-        matched = true;
-      }
-
-      // Pattern 2: "ITEM NAME ₱100.00 x 2" (no dash)
-      if (!matched) {
-        itemMatch = line.match(
-          /^(.+?)\s+[₱P]\s*([\d,]+\.?\d*)\s*[xX×]\s*(\d+)/,
-        );
-        if (itemMatch) {
-          title = itemMatch[1].trim();
-          amount = parseFloat(itemMatch[2].replace(/,/g, ""));
-          quantity = parseInt(itemMatch[3]);
-          matched = true;
-        }
-      }
-
-      // Pattern 3: "2x ITEM NAME ₱100.00" or "2 x ITEM ₱100.00"
-      if (!matched) {
-        itemMatch = line.match(
-          /^(\d+)\s*[xX×]\s*(.+?)\s+[₱P]?\s*([\d,]+\.?\d*)$/,
-        );
-        if (itemMatch) {
-          quantity = parseInt(itemMatch[1]);
-          title = itemMatch[2].trim();
-          amount = parseFloat(itemMatch[3].replace(/,/g, ""));
-          matched = true;
-        }
-      }
-
-      // Pattern 4: "ITEM NAME - ₱100.00" or "ITEM NAME ₱100.00" (no quantity)
-      if (!matched) {
-        itemMatch = line.match(/^(.+?)\s*[-–]?\s*[₱P]\s*([\d,]+\.?\d*)$/);
-        if (itemMatch && itemMatch[1].length > 1) {
-          title = itemMatch[1].trim();
-          amount = parseFloat(itemMatch[2].replace(/,/g, ""));
-          quantity = 1;
-          matched = true;
-        }
-      }
-
-      // Pattern 5: "₱100.00 ITEM NAME" (price first)
-      if (!matched) {
-        itemMatch = line.match(/^[₱P]\s*([\d,]+\.?\d*)\s+(.+)$/);
-        if (itemMatch && itemMatch[2].length > 1) {
-          amount = parseFloat(itemMatch[1].replace(/,/g, ""));
-          title = itemMatch[2].trim();
-          quantity = 1;
-          matched = true;
-        }
-      }
-
-      // Pattern 6: "ITEM NAME 100.00" (no peso sign, price at end)
-      if (!matched) {
-        itemMatch = line.match(/^([A-Za-z].+?)\s+([\d,]+\.?\d{2})$/);
-        if (itemMatch && itemMatch[1].length > 2) {
-          title = itemMatch[1].trim();
-          amount = parseFloat(itemMatch[2].replace(/,/g, ""));
-          quantity = 1;
-          matched = true;
-        }
-      }
-
-      // Pattern 7: "100.00 ITEM NAME" (price first, no peso sign)
-      if (!matched) {
-        itemMatch = line.match(/^([\d,]+\.?\d{2})\s+([A-Za-z].+)$/);
-        if (itemMatch && itemMatch[2].length > 2) {
-          amount = parseFloat(itemMatch[1].replace(/,/g, ""));
-          title = itemMatch[2].trim();
-          quantity = 1;
-          matched = true;
-        }
-      }
-
-      // Pattern 8: "ITEM    100.00" (item and price separated by spaces/tabs)
-      if (!matched) {
-        itemMatch = line.match(/^([A-Za-z][A-Za-z\s]+?)\s{2,}([\d,]+\.?\d*)$/);
-        if (
-          itemMatch &&
-          itemMatch[1].length > 2 &&
-          parseFloat(itemMatch[2]) > 0
-        ) {
-          title = itemMatch[1].trim();
-          amount = parseFloat(itemMatch[2].replace(/,/g, ""));
-          quantity = 1;
-          matched = true;
-        }
-      }
-
-      // Clean up the title and validate
-      if (matched && title && amount > 0) {
-        // Remove common prefixes/suffixes
-        title = title
-          .replace(/^[-*•·]\s*/, "") // Remove bullet points
-          .replace(/^\d+\.\s*/, "") // Remove numbered list
-          .replace(/\s*[-–]\s*$/, "") // Remove trailing dashes
-          .replace(/\s+/g, " ") // Normalize whitespace
-          .trim();
-
-        // Remove quantity indicators from title
-        title = title.replace(/\s*[xX×]\s*\d+\s*$/, "").trim();
-        title = title.replace(/^\d+\s*[xX×]\s*/, "").trim();
-        title = title
-          .replace(/\s*\(\d+\s*(?:pcs?|pieces?|ea)\)\s*/i, "")
-          .trim();
-
-        // Validate both title and price using our helper functions
-        if (isValidTitle(title) && isValidPrice(amount, line)) {
-          const category = categorizeItem(title);
-          const total = (amount * quantity).toFixed(2);
-
-          console.log(
-            `✓ Parsed item: ${title} | Amount: ${amount} | Qty: ${quantity} | Category: ${category}`,
-          );
-
-          newExpenses.push({
-            id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-            category: category,
-            title: title.charAt(0).toUpperCase() + title.slice(1).toLowerCase(),
-            amount: amount.toFixed(2),
-            quantity: quantity.toString(),
-            total: total,
-            isOcrSource: true, // Lock fields – scanned data must not be edited
-          });
-        } else {
-          console.log(
-            `✗ Rejected: "${title}" with amount ${amount} (invalid title or price)`,
-          );
-        }
-      }
-    }
-
-    console.log("Total parsed expenses:", newExpenses.length);
-    console.log("Parsed expenses:", JSON.stringify(newExpenses, null, 2));
-
-    if (newExpenses.length > 0) {
-      setExpenses(newExpenses);
-      Alert.alert(
-        "Receipt Processed",
-        `Found ${newExpenses.length} item(s). Please review and adjust as needed.`,
-        [{ text: "OK" }],
-      );
-    } else {
-      Alert.alert(
-        "No Items Found",
-        "Could not automatically extract items from the receipt. Please add them manually.",
-        [{ text: "OK" }],
-      );
-    }
-  };
-
-  const retakePhoto = () => {
-    setShowScanAnimation(false);
-    setScanComplete(false);
-    setScanError(false);
-    setCapturedImage(null);
-    // Open camera again to take a new photo
-    handleOpenCamera();
-  };
-
-  const viewItems = () => {
-    setShowScanAnimation(false);
-    setScanComplete(false);
-    setScanError(false);
-  };
-
-  const cancelScan = () => {
-    // Abort any ongoing requests
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-
-    // Reset all scan-related states
-    setIsProcessing(false);
-    setShowScanAnimation(false);
-    setScanComplete(false);
-    setScanError(false);
-    setCapturedImage(null);
-  };
-
-  const clearScan = () => {
-    Alert.alert(
-      "Clear Scan",
-      "Are you sure you want to clear all scanned items and start over?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Clear",
-          style: "destructive",
-          onPress: () => {
-            setExpenses([
-              {
-                id: "1",
-                category: "",
-                title: "",
-                amount: "",
-                quantity: "",
-                total: "0.00",
-              },
-            ]);
-            setCapturedImage(null);
-          },
-        },
-      ],
-    );
   };
 
   return (
@@ -1493,404 +634,215 @@ If no items found or image is unclear, return: []`;
         backgroundColor={COLORS.primaryBlue}
       />
 
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerButton}
           onPress={() => router.back()}
         >
-          <ArrowLeft color={COLORS.white} size={24} />
+          <ArrowLeft size={24} color={COLORS.white} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Add Expense</Text>
-        <View style={styles.headerRight}>
-          <SyncBadge compact />
-          <TouchableOpacity style={styles.headerButton}>
-            <HelpTooltip
-              title="Add Expense Help"
-              content="Add business expenses manually or scan receipts with your camera. The OCR scanner will automatically extract item details. You can add multiple items, edit quantities and prices, then save all at once.
-
-                If an expense is scanned via OCR, fields may be locked to preserve data inetgrity. To make corrections, rescan the receipt or create a manual entry."
-            />
-          </TouchableOpacity>
+        <Text style={styles.headerTitle}>Add Expenses</Text>
+        <View style={styles.headerButton}>
+          <HelpTooltip
+            title="Add Expenses Help"
+            content="Manual expense entry is disabled. Scan a receipt or choose a receipt photo, then review the scanned category, total item count, and total amount before saving."
+            iconSize={18}
+            iconColor={COLORS.primaryBlue}
+          />
         </View>
       </View>
 
-      {/* Content */}
-      <View style={styles.contentContainer}>
-        {/* Date Display */}
-        <TouchableOpacity
-          style={styles.dateContainer}
-          onPress={() => setShowDatePicker(true)}
-        >
-          <Text style={styles.dateLabel}>Date</Text>
-          <View style={styles.dateValueRow}>
-            <Text style={styles.dateValue}>{getCurrentDate()}</Text>
-            <Calendar size={16} color={COLORS.primaryBlue} />
-          </View>
-        </TouchableOpacity>
-
-        {/* Scrollable Expense Items */}
-        <ScrollView
-          style={styles.scrollView}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
-          {expenses.map((item, index) => (
-            <View
-              key={item.id}
-              style={[
-                styles.expenseCard,
-                item.isOcrSource && styles.expenseCardOcr,
-              ]}
-            >
-              {/* Remove Button */}
-              {expenses.length > 1 && (
-                <TouchableOpacity
-                  style={styles.removeButton}
-                  onPress={() => removeExpenseItem(item.id)}
-                >
-                  <X color={COLORS.textGray} size={20} />
-                </TouchableOpacity>
-              )}
-
-              {/* Category Dropdown (always locked — set by AI auto-categorization) */}
-              <Text style={styles.inputLabel}>Category</Text>
-              <View style={[styles.dropdownInput, styles.lockedInput]}>
-                <Text
-                  style={[
-                    styles.dropdownText,
-                    !item.category && styles.placeholderText,
-                  ]}
-                >
-                  {categorizingIds.has(item.id)
-                    ? "Categorizing..."
-                    : item.category || "Auto-categorizing..."}
-                </Text>
-                <Lock size={16} color={COLORS.textGray} />
-              </View>
-
-              {/* Expense Title */}
-              <View style={styles.labelRow}>
-                <Text style={styles.inputLabel}>Expense Title</Text>
-                {item.isOcrSource && (
-                  <Lock
-                    size={12}
-                    color={COLORS.textGray}
-                    style={{ marginLeft: 4 }}
-                  />
-                )}
-              </View>
-              <TextInput
-                style={[
-                  styles.textInput,
-                  item.isOcrSource && styles.lockedInput,
-                ]}
-                placeholder="Enter expense title"
-                placeholderTextColor={COLORS.textGray}
-                value={item.title}
-                editable={!item.isOcrSource}
-                onChangeText={(value) =>
-                  updateExpenseItem(item.id, "title", value)
-                }
-              />
-
-              {/* Amount and Quantity Row */}
-              <View style={styles.row}>
-                <View style={styles.halfInput}>
-                  <View style={styles.labelRow}>
-                    <Text style={styles.inputLabel}>Amount</Text>
-                    {item.isOcrSource && (
-                      <Lock
-                        size={12}
-                        color={COLORS.textGray}
-                        style={{ marginLeft: 4 }}
-                      />
-                    )}
-                  </View>
-                  <TextInput
-                    style={[
-                      styles.textInput,
-                      item.isOcrSource && styles.lockedInput,
-                    ]}
-                    placeholder="0.00"
-                    placeholderTextColor={COLORS.textGray}
-                    keyboardType="decimal-pad"
-                    value={item.amount}
-                    editable={!item.isOcrSource}
-                    onChangeText={(value) =>
-                      updateExpenseItem(item.id, "amount", value)
-                    }
-                  />
-                </View>
-
-                <View style={styles.halfInput}>
-                  <View style={styles.labelRow}>
-                    <Text style={styles.inputLabel}>Quantity</Text>
-                    {item.isOcrSource && (
-                      <Lock
-                        size={12}
-                        color={COLORS.textGray}
-                        style={{ marginLeft: 4 }}
-                      />
-                    )}
-                  </View>
-                  <TextInput
-                    style={[
-                      styles.textInput,
-                      item.isOcrSource && styles.lockedInput,
-                    ]}
-                    placeholder="0"
-                    placeholderTextColor={COLORS.textGray}
-                    keyboardType="number-pad"
-                    value={item.quantity}
-                    editable={!item.isOcrSource}
-                    onChangeText={(value) =>
-                      updateExpenseItem(item.id, "quantity", value)
-                    }
-                  />
-                </View>
-              </View>
-
-              {/* Total Display */}
-              <View style={styles.totalContainer}>
-                <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalValue}>₱{item.total}</Text>
-              </View>
-            </View>
-          ))}
-
-          {/* Add More Button */}
-          <TouchableOpacity
-            style={styles.addMoreButton}
-            onPress={addExpenseItem}
-          >
-            <Plus color={COLORS.primaryBlue} size={20} />
-            <Text style={styles.addMoreText}>Add Another Item</Text>
-          </TouchableOpacity>
-
-          {/* Action Buttons inside ScrollView */}
-          <TouchableOpacity
-            style={[styles.saveButton, { opacity: isSaving ? 0.6 : 1 }]}
-            onPress={handleSave}
-            disabled={isSaving}
-          >
-            {isSaving ? (
-              <ActivityIndicator size="small" color={COLORS.white} />
-            ) : (
-              <Text style={styles.saveButtonText}>Save Expense</Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.cameraButton}
-            onPress={handleOpenCamera}
-          >
-            <Camera color={COLORS.white} size={24} />
-            <Text style={styles.cameraButtonText}>Scan Receipt</Text>
-          </TouchableOpacity>
-
-          {/* Clear Scan Button */}
-          {(capturedImage || expenses.length > 1 || expenses[0].title) && (
-            <TouchableOpacity style={styles.clearButton} onPress={clearScan}>
-              <Trash2 color={COLORS.textDark} size={20} />
-              <Text style={styles.clearButtonText}>Clear Scan</Text>
-            </TouchableOpacity>
-          )}
-
-          {/* Bottom Spacing for tab bar */}
-          <View style={{ height: 100 }} />
-        </ScrollView>
-      </View>
-
-      {/* Category Picker Modal */}
-      <Modal
-        visible={showCategoryPicker}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowCategoryPicker(false)}
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={[
+          styles.contentContainer,
+          {
+            paddingBottom: tabBarHeight + Math.max(insets.bottom, 16) + 96,
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.categoryPickerContainer}>
-            <View style={styles.categoryPickerHeader}>
-              <Text style={styles.categoryPickerTitle}>Select Category</Text>
-              <TouchableOpacity onPress={() => setShowCategoryPicker(false)}>
-                <X color={COLORS.textDark} size={24} />
-              </TouchableOpacity>
-            </View>
+        <View style={styles.dateRowCard}>
+          <Text style={styles.dateRowLabel}>Date</Text>
+          <TouchableOpacity
+            style={styles.dateRowValueButton}
+            onPress={() => setShowDatePicker(true)}
+          >
+            <Text style={styles.dateRowValueText}>
+              {formatDateLabel(selectedDate)}
+            </Text>
+            <Calendar size={16} color={COLORS.primaryBlue} />
+          </TouchableOpacity>
+        </View>
 
-            {/* Custom Category Input */}
-            <View style={styles.customCategoryContainer}>
-              <Text style={styles.customCategoryLabel}>Or type your own:</Text>
-              <View style={styles.customInputRow}>
-                <TextInput
-                  style={styles.customCategoryInput}
-                  placeholder="Enter custom category"
-                  placeholderTextColor={COLORS.textGray}
-                  value={customCategory}
-                  onChangeText={setCustomCategory}
-                  onSubmitEditing={selectCustomCategory}
-                  returnKeyType="done"
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.customCategoryButton,
-                    !customCategory.trim() &&
-                      styles.customCategoryButtonDisabled,
-                  ]}
-                  onPress={selectCustomCategory}
-                  disabled={!customCategory.trim()}
-                >
-                  <Text style={styles.customCategoryButtonText}>Add</Text>
-                </TouchableOpacity>
+        <View style={styles.summaryPanel}>
+          <Text style={styles.receiptNumberText}>
+            Receipt No. To be generated after save
+          </Text>
+
+          <Text style={styles.inputLabel}>Category</Text>
+          <View style={styles.valueField}>
+            <Text style={styles.valueFieldText}>
+              {receiptSummary?.category || "Not Detected Yet"}
+            </Text>
+          </View>
+
+          <View style={styles.summaryMetricsRow}>
+            <View style={styles.metricItem}>
+              <Text style={styles.inputLabel}>Total No. Of Items</Text>
+              <View style={styles.valueField}>
+                <Text style={styles.valueFieldText}>
+                  {receiptSummary?.totalItems !== undefined
+                    ? String(receiptSummary.totalItems)
+                    : "Not Detected Yet"}
+                </Text>
               </View>
             </View>
 
-            {/* Divider */}
-            <View style={styles.categoryDivider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>or choose from list</Text>
-              <View style={styles.dividerLine} />
+            <View style={styles.metricItem}>
+              <Text style={styles.inputLabel}>Total Amount</Text>
+              <View style={styles.valueField}>
+                <Text style={styles.valueFieldText}>
+                  {receiptSummary?.totalAmount !== undefined
+                    ? `₱${receiptSummary.totalAmount.toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}`
+                    : "Not Detected Yet"}
+                </Text>
+              </View>
             </View>
-
-            <ScrollView style={styles.categoryList}>
-              {expenseCategories.map((category) => (
-                <TouchableOpacity
-                  key={category}
-                  style={styles.categoryItem}
-                  onPress={() => selectCategory(category)}
-                >
-                  <Text style={styles.categoryItemText}>{category}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
           </View>
-        </View>
-      </Modal>
 
-      {/* Date Picker */}
-      {showDatePicker && Platform.OS === "android" && (
+          <TouchableOpacity
+            style={[
+              styles.viewReceiptButton,
+              !capturedImage && styles.viewReceiptButtonDisabled,
+            ]}
+            onPress={() => setShowReceiptPreview(true)}
+            disabled={!capturedImage}
+          >
+            <Text style={styles.viewReceiptButtonText}>View Receipt</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={[
+            styles.saveButton,
+            (!receiptSummary || isSaving || isScanning) &&
+              styles.saveButtonDisabled,
+          ]}
+          onPress={handleSave}
+          disabled={!receiptSummary || isSaving || isScanning}
+        >
+          {isSaving ? (
+            <ActivityIndicator color={COLORS.white} />
+          ) : (
+            <Text style={styles.saveButtonText}>Save Expenses</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.scanButton}
+          onPress={launchCamera}
+          disabled={isScanning || isSaving}
+        >
+          {isScanning ? (
+            <ActivityIndicator color={COLORS.white} />
+          ) : (
+            <>
+              <Camera size={18} color={COLORS.white} />
+              <Text style={styles.scanButtonText}>Scan Receipt</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.choosePhotoButton}
+          onPress={launchPhotoLibrary}
+          disabled={isScanning || isSaving}
+        >
+          <ImageIcon size={18} color={COLORS.primaryBlue} />
+          <Text style={styles.choosePhotoButtonText}>Choose Photo</Text>
+        </TouchableOpacity>
+
+        {capturedImage ? (
+          <View style={styles.previewActions}>
+            <TouchableOpacity
+              style={styles.previewButton}
+              onPress={launchCamera}
+              disabled={isScanning || isSaving}
+            >
+              <RotateCcw size={16} color={COLORS.primaryBlue} />
+              <Text style={styles.previewButtonText}>Rescan</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.previewButton}
+              onPress={resetScreen}
+              disabled={isScanning || isSaving}
+            >
+              <Trash2 size={16} color="#b91c1c" />
+              <Text
+                style={[styles.previewButtonText, styles.previewDeleteText]}
+              >
+                Clear
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </ScrollView>
+
+      {showDatePicker ? (
         <DateTimePicker
           value={selectedDate}
           mode="date"
-          display="default"
-          maximumDate={new Date()}
-          onChange={(event: DateTimePickerEvent, date?: Date) => {
-            setShowDatePicker(false);
-            if (event.type === "set" && date) setSelectedDate(date);
-          }}
+          display={Platform.OS === "ios" ? "spinner" : "default"}
+          onChange={handleDateChange}
         />
-      )}
+      ) : null}
+
       <Modal
-        visible={showDatePicker && Platform.OS === "ios"}
+        visible={showReceiptPreview}
         transparent
-        animationType="slide"
-        onRequestClose={() => setShowDatePicker(false)}
+        animationType="fade"
+        onRequestClose={() => setShowReceiptPreview(false)}
       >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowDatePicker(false)}
-        >
-          <View
-            style={styles.datePickerModalContent}
-            onStartShouldSetResponder={() => true}
-          >
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Date</Text>
-              <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                <X size={24} color={COLORS.textGray} />
-              </TouchableOpacity>
-            </View>
-            <DateTimePicker
-              value={selectedDate}
-              mode="date"
-              display="spinner"
-              maximumDate={new Date()}
-              onChange={(_: DateTimePickerEvent, date?: Date) => {
-                if (date) setSelectedDate(date);
-              }}
-              style={{ alignSelf: "center" }}
-            />
+        <View style={styles.previewModalOverlay}>
+          <View style={styles.previewModalCard}>
             <TouchableOpacity
-              style={styles.applyDateButton}
-              onPress={() => setShowDatePicker(false)}
+              style={styles.previewModalClose}
+              onPress={() => setShowReceiptPreview(false)}
             >
-              <Text style={styles.applyDateButtonText}>Done</Text>
+              <X size={20} color={COLORS.textDark} />
             </TouchableOpacity>
+            {capturedImage ? (
+              <Image
+                source={{ uri: capturedImage }}
+                style={styles.previewModalImage}
+                resizeMode="contain"
+              />
+            ) : (
+              <Text style={styles.previewModalEmptyText}>
+                No receipt image available.
+              </Text>
+            )}
           </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
 
-      {/* Scanning Animation Modal */}
-      <Modal
-        visible={showScanAnimation}
-        transparent={true}
-        animationType="fade"
-      >
-        <View style={styles.animationModalOverlay}>
-          <View style={styles.animationContainer}>
+      <Modal visible={isScanning} transparent animationType="fade">
+        <View style={styles.scanModalOverlay}>
+          <View style={styles.scanModalCard}>
             <LottieView
-              ref={lottieRef}
-              source={
-                scanError
-                  ? require("../../assets/animations/Error Occurred!.json")
-                  : scanComplete
-                    ? require("../../assets/animations/Check Animation.json")
-                    : require("../../assets/animations/Document OCR Scan.json")
-              }
+              source={require("../../assets/animations/Document OCR Scan.json")}
               autoPlay
-              loop={!scanComplete && !scanError}
-              style={styles.lottieAnimation}
+              loop
+              style={styles.scanAnimation}
             />
-            <Text style={styles.animationText}>
-              {scanError
-                ? "OCR Failed"
-                : scanComplete
-                  ? "Receipt Processed!"
-                  : "Scanning Receipt..."}
+            <Text style={styles.scanModalTitle}>Scanning Receipt...</Text>
+            <Text style={styles.scanModalText}>
+              BizWise is reading your receipt summary. Please wait.
             </Text>
-            {scanError && (
-              <Text style={styles.animationSubText}>
-                Could not process the image.{"\n"}Please try again with a
-                clearer photo.
-              </Text>
-            )}
-            {scanComplete && (
-              <Text style={styles.animationSubText}>
-                Items detected successfully.{"\n"}Review and adjust as needed.
-              </Text>
-            )}
-            {!scanError && !scanComplete && isProcessing && (
-              <Text style={styles.animationSubText}>{processingMessage}</Text>
-            )}
-
-            {/* Show cancel button while processing */}
-            {!scanError && !scanComplete && isProcessing && (
-              <TouchableOpacity
-                style={[styles.animationButton, styles.cancelButton]}
-                onPress={cancelScan}
-              >
-                <Text style={styles.animationButtonText}>Cancel</Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Show button when animation completes (error or success) */}
-            {scanError && (
-              <TouchableOpacity
-                style={styles.animationButton}
-                onPress={retakePhoto}
-              >
-                <Text style={styles.animationButtonText}>Retake Photo</Text>
-              </TouchableOpacity>
-            )}
-            {scanComplete && (
-              <TouchableOpacity
-                style={styles.animationButton}
-                onPress={viewItems}
-              >
-                <Text style={styles.animationButtonText}>View Items</Text>
-              </TouchableOpacity>
-            )}
           </View>
         </View>
       </Modal>
@@ -1903,643 +855,436 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.primaryBlue,
   },
-
-  // Header
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingTop: 50,
-    paddingBottom: 15,
-    backgroundColor: COLORS.primaryBlue,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: COLORS.white,
+    paddingTop: 52,
+    paddingBottom: 18,
   },
   headerButton: {
-    padding: 5,
-    width: 34,
-  },
-  headerRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  helpCircleBg: {
-    backgroundColor: COLORS.white,
-    borderRadius: 15,
-    width: 26,
-    height: 26,
-    justifyContent: "center",
+    width: 28,
     alignItems: "center",
   },
-
-  // Content
-  contentContainer: {
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: COLORS.white,
+  },
+  content: {
     flex: 1,
     backgroundColor: COLORS.lightBlueBg,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
   },
-
-  // Date
-  dateContainer: {
+  contentContainer: {
+    padding: 20,
+    paddingBottom: 40,
+    gap: 16,
+  },
+  dateRowCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 15,
+    justifyContent: "space-between",
   },
-  dateLabel: {
+  dateRowLabel: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
     color: COLORS.textDark,
   },
-  dateValue: {
-    fontSize: 14,
-    color: COLORS.textGray,
-  },
-  dateValueRow: {
+  dateRowValueButton: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
-
-  // Scroll
-  scrollView: {
+  dateRowValueText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.primaryBlue,
+  },
+  summaryPanel: {
+    backgroundColor: "#7398be",
+    borderRadius: 14,
+    padding: 14,
+  },
+  receiptNumberText: {
+    color: COLORS.white,
+    fontWeight: "700",
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  inputLabel: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  valueField: {
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 10,
+    minHeight: 40,
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  valueFieldText: {
+    color: COLORS.primaryBlue,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  summaryMetricsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+  metricItem: {
     flex: 1,
   },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+  viewReceiptButton: {
+    marginTop: 12,
+    alignSelf: "center",
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
   },
-
-  // Expense Card
-  expenseCard: {
+  viewReceiptButtonDisabled: {
+    opacity: 0.45,
+  },
+  viewReceiptButtonText: {
+    color: COLORS.white,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  noticeCard: {
+    backgroundColor: "#dbeafe",
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+  },
+  noticeTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+    marginBottom: 6,
+  },
+  noticeText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: COLORS.textDark,
+  },
+  categoryChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 12,
+  },
+  categoryChip: {
     backgroundColor: COLORS.white,
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 15,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-    position: "relative",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
   },
-  removeButton: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    padding: 5,
+  categoryChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
   },
-
-  // Inputs
-  inputLabel: {
+  sectionCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.textGray,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  dateChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#e8f0fa",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  dateChipText: {
     fontSize: 12,
     fontWeight: "600",
-    color: COLORS.textDark,
-    marginBottom: 8,
-    marginTop: 12,
+    color: COLORS.primaryBlue,
   },
-  textInput: {
-    backgroundColor: COLORS.lightBlueBg,
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: COLORS.textDark,
-  },
-  dropdownInput: {
-    backgroundColor: COLORS.lightBlueBg,
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    paddingVertical: 12,
+  actionRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    gap: 12,
+    marginBottom: 16,
   },
-  dropdownText: {
-    fontSize: 14,
-    color: COLORS.textGray,
-  },
-
-  // Row
-  row: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 15,
-  },
-  halfInput: {
+  primaryAction: {
     flex: 1,
-  },
-
-  // Total
-  totalContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 15,
-    paddingTop: 15,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.lightBlueBg,
-  },
-  totalLabel: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: COLORS.textDark,
-  },
-  totalValue: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: COLORS.primaryBlue,
-  },
-
-  // Add More Button
-  addMoreButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 15,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: COLORS.primaryBlue,
-    borderStyle: "dashed",
-    marginBottom: 15,
-  },
-  addMoreText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: COLORS.primaryBlue,
-    marginLeft: 8,
-  },
-
-  // Action Buttons
-  saveButton: {
+    minHeight: 48,
     backgroundColor: COLORS.primaryBlue,
-    borderRadius: 12,
-    paddingVertical: 16,
+    borderRadius: 14,
+    flexDirection: "row",
     alignItems: "center",
-    marginTop: 15,
+    justifyContent: "center",
+    gap: 8,
   },
-  saveButtonText: {
+  primaryActionText: {
     color: COLORS.white,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "700",
   },
-  cameraButton: {
-    backgroundColor: "#6ea2d5",
-    borderRadius: 12,
-    paddingVertical: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    marginTop: 12,
-  },
-  cameraButtonText: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  clearButton: {
-    backgroundColor: COLORS.white,
-    borderRadius: 12,
-    paddingVertical: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    marginTop: 12,
+  secondaryAction: {
+    flex: 1,
+    minHeight: 48,
+    backgroundColor: "#edf4fc",
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
-  },
-  clearButtonText: {
-    color: COLORS.textDark,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-
-  // Modal Styles
-  modalContainer: {
-    flex: 1,
-    backgroundColor: COLORS.primaryBlue,
-  },
-  modalHeader: {
+    borderColor: COLORS.border,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingTop: 50,
-    paddingBottom: 15,
-    backgroundColor: COLORS.primaryBlue,
+    justifyContent: "center",
+    gap: 8,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: COLORS.white,
+  secondaryActionText: {
+    color: COLORS.primaryBlue,
+    fontSize: 14,
+    fontWeight: "700",
   },
-  closeButton: {
-    padding: 5,
-    width: 34,
-  },
-
-  // Image Preview
-  imagePreviewContainer: {
-    backgroundColor: COLORS.white,
-    margin: 20,
-    borderRadius: 16,
-    overflow: "hidden",
-    height: 300,
-    position: "relative",
+  previewCard: {
+    gap: 12,
   },
   previewImage: {
     width: "100%",
-    height: "100%",
-  },
-  scanGuideOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  scanGuideCornerTL: {
-    position: "absolute",
-    top: 20,
-    left: 20,
-    width: 30,
-    height: 30,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderColor: COLORS.primaryBlue,
-  },
-  scanGuideCornerTR: {
-    position: "absolute",
-    top: 20,
-    right: 20,
-    width: 30,
-    height: 30,
-    borderTopWidth: 3,
-    borderRightWidth: 3,
-    borderColor: COLORS.primaryBlue,
-  },
-  scanGuideCornerBL: {
-    position: "absolute",
-    bottom: 40,
-    left: 20,
-    width: 30,
-    height: 30,
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-    borderColor: COLORS.primaryBlue,
-  },
-  scanGuideCornerBR: {
-    position: "absolute",
-    bottom: 40,
-    right: 20,
-    width: 30,
-    height: 30,
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-    borderColor: COLORS.primaryBlue,
-  },
-  scanGuideText: {
-    position: "absolute",
-    bottom: 10,
-    color: COLORS.primaryBlue,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-
-  // OCR Container
-  ocrContainer: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-    marginHorizontal: 20,
+    height: 240,
     borderRadius: 16,
-    padding: 20,
+    backgroundColor: COLORS.lightBlueBg,
   },
-  ocrLabel: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: COLORS.textDark,
-    marginBottom: 12,
-  },
-  ocrScrollView: {
-    flex: 1,
-  },
-  processingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 15,
-  },
-  processingText: {
-    fontSize: 14,
-    color: COLORS.textGray,
-  },
-
-  // Modal Actions
-  modalActions: {
+  previewActions: {
     flexDirection: "row",
-    paddingHorizontal: 20,
-    paddingVertical: 20,
     gap: 12,
   },
-  retakeButton: {
+  previewButton: {
     flex: 1,
-    backgroundColor: COLORS.white,
+    minHeight: 42,
     borderRadius: 12,
-    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    borderWidth: 2,
-    borderColor: COLORS.primaryBlue,
-  },
-  retakeButtonText: {
-    color: COLORS.primaryBlue,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  reprocessButton: {
-    backgroundColor: COLORS.primaryBlue,
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  reprocessButtonText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  acceptButton: {
-    flex: 1,
     backgroundColor: COLORS.white,
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: "center",
-    justifyContent: "center",
   },
-  acceptButtonText: {
-    color: COLORS.primaryBlue,
-    fontSize: 16,
+  previewButtonText: {
+    fontSize: 13,
     fontWeight: "700",
+    color: COLORS.primaryBlue,
   },
-
-  animationModalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
+  previewDeleteText: {
+    color: "#b91c1c",
+  },
+  emptyPreview: {
+    alignItems: "center",
     justifyContent: "center",
-    alignItems: "center",
-  },
-  animationContainer: {
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 30,
-    alignItems: "center",
-    width: 300,
-  },
-  lottieAnimation: {
-    width: 200,
-    height: 200,
-  },
-  animationText: {
-    marginTop: 20,
-    fontSize: 18,
-    fontWeight: "600",
-    color: COLORS.textDark,
-    textAlign: "center",
-  },
-  animationSubText: {
-    marginTop: 10,
-    fontSize: 14,
-    color: COLORS.textGray,
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  animationButton: {
-    marginTop: 20,
-    backgroundColor: COLORS.primaryBlue,
-    paddingVertical: 12,
-    paddingHorizontal: 30,
-    borderRadius: 25,
-    minWidth: 200,
-  },
-  cancelButton: {
-    backgroundColor: COLORS.textGray,
-  },
-  animationButtonText: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-
-  // Category Picker Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "flex-end",
-  },
-  categoryPickerContainer: {
-    backgroundColor: COLORS.white,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "70%",
-  },
-  categoryPickerHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
-  },
-  categoryPickerTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: COLORS.textDark,
-  },
-  categoryList: {
-    maxHeight: 400,
-  },
-  categoryItem: {
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f3f4f6",
-  },
-  categoryItemText: {
-    fontSize: 16,
-    color: COLORS.textDark,
-  },
-  placeholderText: {
-    color: COLORS.textGray,
-  },
-  customCategoryContainer: {
-    padding: 20,
-    paddingBottom: 0,
-  },
-  customCategoryLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: COLORS.textDark,
-    marginBottom: 10,
-  },
-  customInputRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  customCategoryInput: {
-    flex: 1,
-    backgroundColor: "#f9fafb",
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: COLORS.textDark,
+    paddingVertical: 34,
+    paddingHorizontal: 18,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderStyle: "dashed",
+    borderColor: COLORS.border,
+    backgroundColor: "#f8fbff",
   },
-  customCategoryButton: {
-    backgroundColor: COLORS.primaryBlue,
-    borderRadius: 10,
-    paddingHorizontal: 20,
-    justifyContent: "center",
-    alignItems: "center",
+  emptyPreviewTitle: {
+    marginTop: 10,
+    fontSize: 15,
+    fontWeight: "700",
+    color: COLORS.textDark,
   },
-  customCategoryButtonDisabled: {
-    backgroundColor: COLORS.textGray,
-    opacity: 0.5,
+  emptyPreviewText: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.textGray,
+    textAlign: "center",
   },
-  customCategoryButtonText: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  categoryDivider: {
+  summaryGrid: {
     flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    flexWrap: "wrap",
+    justifyContent: "space-between",
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: "#e5e7eb",
+  summaryCard: {
+    width: "48%",
+    minHeight: 96,
+    marginBottom: 12,
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: "#f8fbff",
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
-  dividerText: {
-    marginHorizontal: 10,
-    fontSize: 12,
+  summaryLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.textGray,
+    textTransform: "uppercase",
+    marginBottom: 6,
+  },
+  summaryValue: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+  },
+  metaRow: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    gap: 4,
+  },
+  metaLabel: {
+    fontSize: 11,
+    fontWeight: "700",
     color: COLORS.textGray,
     textTransform: "uppercase",
   },
-  // Date Picker Modal
-  datePickerModalContent: {
-    backgroundColor: COLORS.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    paddingBottom: 40,
-  },
-  datePickerContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 20,
-    paddingHorizontal: 10,
-  },
-  dateNavButton: {
-    padding: 10,
-  },
-  dateNavButtonText: {
-    fontSize: 20,
-    color: COLORS.primaryBlue,
-    fontWeight: "700",
-  },
-  selectedDateText: {
-    fontSize: 18,
-    fontWeight: "600",
+  metaValue: {
+    fontSize: 13,
+    lineHeight: 19,
     color: COLORS.textDark,
   },
-  quickDateButtons: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 10,
-  },
-  quickDateButton: {
-    flex: 1,
-    backgroundColor: COLORS.lightBlueBg,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  quickDateButtonText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: COLORS.primaryBlue,
-  },
-  applyDateButton: {
+  saveButton: {
+    minHeight: 54,
+    borderRadius: 16,
     backgroundColor: COLORS.primaryBlue,
-    paddingVertical: 14,
-    borderRadius: 12,
     alignItems: "center",
-    marginTop: 20,
+    justifyContent: "center",
   },
-  applyDateButtonText: {
-    color: COLORS.white,
+  saveButtonDisabled: {
+    opacity: 0.5,
+  },
+  saveButtonText: {
     fontSize: 16,
+    fontWeight: "800",
+    color: COLORS.white,
+  },
+  scanButton: {
+    minHeight: 54,
+    borderRadius: 16,
+    backgroundColor: COLORS.primaryBlue,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  scanButtonText: {
+    color: COLORS.white,
+    fontSize: 15,
     fontWeight: "700",
   },
-
-  // ── OCR-locked card styles ────────────────────────────────────────────────
-  expenseCardOcr: {
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.primaryBlue,
-  },
-  ocrBadgeRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    backgroundColor: "#eef4fb",
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 14,
-    gap: 6,
-  },
-  ocrBadgeText: {
-    flex: 1,
-    fontSize: 11,
-    color: COLORS.primaryBlue,
-    lineHeight: 16,
-  },
-  lockedInput: {
-    backgroundColor: "#f3f4f6",
-    color: "#6b7280",
-  },
-
-  // ── Label row (label + inline icon/hint) ─────────────────────────────────
-  labelRow: {
-    flexDirection: "row",
+  choosePhotoButton: {
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: "#edf4fc",
+    borderWidth: 1,
+    borderColor: COLORS.border,
     alignItems: "center",
-    // marginTop/Bottom intentionally omitted here; the inputLabel inside
-    // the row already carries marginTop: 12 and marginBottom: 8 which
-    // propagate through the flex layout correctly.
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
   },
-  autoCategoryHint: {
-    marginLeft: 6,
-    fontSize: 10,
+  choosePhotoButtonText: {
     color: COLORS.primaryBlue,
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  previewModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  previewModalCard: {
+    width: "100%",
+    maxWidth: 360,
+    maxHeight: "80%",
+    backgroundColor: COLORS.white,
+    borderRadius: 14,
+    padding: 12,
+  },
+  previewModalClose: {
+    alignSelf: "flex-end",
+    padding: 4,
+  },
+  previewModalImage: {
+    width: "100%",
+    height: 430,
+    backgroundColor: COLORS.lightBlueBg,
+    borderRadius: 10,
+  },
+  previewModalEmptyText: {
+    color: COLORS.textGray,
+    textAlign: "center",
+    paddingVertical: 20,
+    fontSize: 13,
+  },
+  scanModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  scanModalCard: {
+    width: "100%",
+    maxWidth: 320,
+    borderRadius: 18,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+  scanAnimation: {
+    width: 180,
+    height: 180,
+    marginBottom: 6,
+  },
+  scanModalTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: COLORS.textDark,
+    marginBottom: 6,
+  },
+  scanModalText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.textGray,
+    textAlign: "center",
   },
 });

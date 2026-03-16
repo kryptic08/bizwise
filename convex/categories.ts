@@ -163,68 +163,16 @@ export const getCategoryCounts = query({
   },
 });
 
-// Default categories based on business type
-const getDefaultCategoriesForBusinessType = (businessType?: string) => {
-  const defaults: Record<
-    string,
-    { name: string; icon: string; color: string; sortOrder: number }[]
-  > = {
-    "Food Business": [
-      { name: "Snacks", icon: "Cookie", color: "#FF6B6B", sortOrder: 1 },
-      { name: "Rice Meals", icon: "Utensils", color: "#4ECDC4", sortOrder: 2 },
-      { name: "Drinks", icon: "Coffee", color: "#95E1D3", sortOrder: 3 },
-    ],
-    "Printing Business": [
-      { name: "Printing", icon: "Printer", color: "#4ECDC4", sortOrder: 1 },
-      { name: "Binding", icon: "Book", color: "#95E1D3", sortOrder: 2 },
-      { name: "Supplies", icon: "Package", color: "#FF6B6B", sortOrder: 3 },
-    ],
-    "Laundry Shop": [
-      { name: "Wash", icon: "RefreshCw", color: "#4ECDC4", sortOrder: 1 },
-      { name: "Dry Clean", icon: "Sparkles", color: "#AA96DA", sortOrder: 2 },
-      { name: "Supplies", icon: "Package", color: "#FF6B6B", sortOrder: 3 },
-    ],
-    "Sari-sari Store": [
-      { name: "Snacks", icon: "Cookie", color: "#FDCB6E", sortOrder: 1 },
-      { name: "Drinks", icon: "Coffee", color: "#6C5CE7", sortOrder: 2 },
-      { name: "Sundries", icon: "ShoppingBag", color: "#FF6B6B", sortOrder: 3 },
-    ],
-    // Legacy types kept for backward compatibility
-    "Printing Services": [
-      { name: "Printing", icon: "Printer", color: "#4ECDC4", sortOrder: 1 },
-      { name: "Binding", icon: "Book", color: "#95E1D3", sortOrder: 2 },
-      { name: "Supplies", icon: "Package", color: "#FF6B6B", sortOrder: 3 },
-    ],
-    Construction: [
-      { name: "Materials", icon: "Package", color: "#FF6B6B", sortOrder: 1 },
-      { name: "Tools", icon: "Wrench", color: "#4ECDC4", sortOrder: 2 },
-      { name: "Labor", icon: "Truck", color: "#95E1D3", sortOrder: 3 },
-    ],
-    Retail: [
-      { name: "Products", icon: "ShoppingBag", color: "#FF6B6B", sortOrder: 1 },
-      { name: "Inventory", icon: "Package", color: "#4ECDC4", sortOrder: 2 },
-      { name: "Supplies", icon: "Box", color: "#95E1D3", sortOrder: 3 },
-    ],
-    "Meat Shop": [
-      { name: "Poultry", icon: "Package", color: "#FF6B6B", sortOrder: 1 },
-      { name: "Pork", icon: "Package", color: "#4ECDC4", sortOrder: 2 },
-      { name: "Beef", icon: "Package", color: "#95E1D3", sortOrder: 3 },
-    ],
-    Others: [
-      { name: "General", icon: "ShoppingBag", color: "#4ECDC4", sortOrder: 1 },
-      { name: "Supplies", icon: "Package", color: "#95E1D3", sortOrder: 2 },
-      { name: "Services", icon: "ShoppingBag", color: "#FF6B6B", sortOrder: 3 },
-    ],
-  };
-
-  return defaults[businessType || "Others"] || defaults["Others"];
-};
+const DEFAULT_CATEGORIES = [
+  { name: "Products", icon: "ShoppingBag", color: "#4ECDC4", sortOrder: 1 },
+  { name: "Services", icon: "Briefcase", color: "#95E1D3", sortOrder: 2 },
+  { name: "Supplies", icon: "Package", color: "#FF6B6B", sortOrder: 3 },
+];
 
 // Migrate default categories for a user (call this once per user)
 export const migrateDefaultCategories = mutation({
   args: {
     userId: v.id("users"),
-    businessType: v.optional(v.string()),
     forceReset: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -246,10 +194,7 @@ export const migrateDefaultCategories = mutation({
       }
     }
 
-    // Create default categories based on business type
-    const defaultCategories = getDefaultCategoriesForBusinessType(
-      args.businessType,
-    );
+    const defaultCategories = DEFAULT_CATEGORIES;
 
     const categoryIds = [];
     const categoryMap: Record<string, Id<"categories">> = {};

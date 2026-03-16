@@ -19,6 +19,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
+  Image,
   Modal,
   Platform,
   StatusBar,
@@ -61,6 +62,15 @@ interface ItemDetail {
   amount: string;
 }
 
+interface ExpenseSummary {
+  receiptNumber: string;
+  category: string;
+  totalItems: number;
+  totalAmount: string;
+  hasReceiptImage: boolean;
+  receiptImageUrl?: string;
+}
+
 interface Transaction {
   id: string;
   transactionId: string;
@@ -72,6 +82,7 @@ interface Transaction {
   createdAt: number;
   sortKey: number;
   itemDetails: ItemDetail[];
+  expenseSummary?: ExpenseSummary;
   isPending?: boolean;
   mutationStatus?: string;
   errorMessage?: string;
@@ -87,7 +98,7 @@ export default function TransactionScreen() {
   const handleMoveToTrash = (item: Transaction) => {
     Alert.alert(
       "Move to Trash?",
-      `${item.transactionId} will be moved to trash and can be recovered within 30 days.`,
+      `${item.transactionId} will be moved to trash and can be recovered within 90 days.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -316,6 +327,9 @@ export default function TransactionScreen() {
 
   const [filterType, setFilterType] = useState<TransactionType | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selectedReceiptImageUrl, setSelectedReceiptImageUrl] = useState<
+    string | null
+  >(null);
 
   // Reset page when date filter changes
   React.useEffect(() => {
@@ -389,8 +403,7 @@ export default function TransactionScreen() {
   }) => {
     const isIncome = item.type === "income";
     const isExpanded = expandedId === item.id;
-    const itemCount =
-      parseInt(item.items) || parseInt(item.items.split(" ")[0]) || 0;
+    const showExpenseSummary = !isIncome && Boolean(item.expenseSummary);
 
     return (
       <View style={styles.transactionCard}>
@@ -439,10 +452,13 @@ export default function TransactionScreen() {
             </View>
           </View>
 
-          <View style={styles.chevronWrapper}>
+          <View style={styles.expandButton}>
+            <Text style={styles.expandButtonText}>
+              {isExpanded ? "." : "."}
+            </Text>
             <ChevronDown
               size={18}
-              color={COLORS.textGray}
+              color={COLORS.primaryBlue}
               style={{
                 transform: [{ rotate: isExpanded ? "180deg" : "0deg" }],
               }}
@@ -453,44 +469,109 @@ export default function TransactionScreen() {
         {isExpanded && (
           <View style={styles.expandedContainer}>
             <View style={styles.expandedDivider} />
-            <View style={styles.tableHeader}>
-              <Text style={[styles.tableHeaderText, styles.colName]}>Name</Text>
-              <Text style={[styles.tableHeaderText, styles.colCategory]}>
-                Category
-              </Text>
-              <Text style={[styles.tableHeaderText, styles.colPrice]}>
-                Price/pc
-              </Text>
-              <Text style={[styles.tableHeaderText, styles.colPcs]}>Pcs</Text>
-              <Text style={[styles.tableHeaderText, styles.colAmount]}>
-                Amount
-              </Text>
-            </View>
-            {item.itemDetails.map((detail, index) => (
-              <View key={index} style={styles.tableRow}>
-                <Text
-                  style={[styles.tableCell, styles.colName]}
-                  numberOfLines={1}
-                >
-                  {detail.name}
+            {showExpenseSummary ? (
+              <>
+                <Text style={styles.expandedTitle}>
+                  Expenses Receipt Summary
                 </Text>
-                <Text
-                  style={[styles.tableCell, styles.colCategory]}
-                  numberOfLines={1}
-                >
-                  {detail.category}
-                </Text>
-                <Text style={[styles.tableCell, styles.colPrice]}>
-                  {detail.pricePerPiece}
-                </Text>
-                <Text style={[styles.tableCell, styles.colPcs]}>
-                  {detail.pieces}
-                </Text>
-                <Text style={[styles.tableCellBold, styles.colAmount]}>
-                  {detail.amount}
-                </Text>
-              </View>
-            ))}
+                <View style={styles.expenseSummaryGrid}>
+                  <View style={styles.expenseSummaryCard}>
+                    <Text style={styles.summaryCardLabel}>Receipt Number</Text>
+                    <Text style={styles.summaryCardValue}>
+                      {item.expenseSummary?.receiptNumber}
+                    </Text>
+                  </View>
+                  <View style={styles.expenseSummaryCard}>
+                    <Text style={styles.summaryCardLabel}>Category</Text>
+                    <Text style={styles.summaryCardValue}>
+                      {item.expenseSummary?.category}
+                    </Text>
+                  </View>
+                  <View style={styles.expenseSummaryCard}>
+                    <Text style={styles.summaryCardLabel}>Total Items</Text>
+                    <Text style={styles.summaryCardValue}>
+                      {item.expenseSummary?.totalItems}
+                    </Text>
+                  </View>
+                  <View style={styles.expenseSummaryCard}>
+                    <Text style={styles.summaryCardLabel}>Total Amount</Text>
+                    <Text style={styles.summaryCardValue}>
+                      {item.expenseSummary?.totalAmount}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.receiptNoteCard}>
+                  <Text style={styles.receiptNoteTitle}>
+                    Saved Receipt Image
+                  </Text>
+                  <Text style={styles.receiptNoteText}>
+                    {item.expenseSummary?.hasReceiptImage
+                      ? "Receipt image saved. It will be deleted automatically after 3 months."
+                      : "No receipt image is available for this Expenses entry."}
+                  </Text>
+                  {item.expenseSummary?.receiptImageUrl ? (
+                    <TouchableOpacity
+                      style={styles.receiptPreviewButton}
+                      onPress={() =>
+                        setSelectedReceiptImageUrl(
+                          item.expenseSummary?.receiptImageUrl || null,
+                        )
+                      }
+                    >
+                      <Text style={styles.receiptPreviewButtonText}>
+                        View Receipt Image
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.expandedTitle}>Transaction Items</Text>
+                <View style={styles.tableHeader}>
+                  <Text style={[styles.tableHeaderText, styles.colName]}>
+                    Name
+                  </Text>
+                  <Text style={[styles.tableHeaderText, styles.colCategory]}>
+                    Category
+                  </Text>
+                  <Text style={[styles.tableHeaderText, styles.colPrice]}>
+                    Price/pc
+                  </Text>
+                  <Text style={[styles.tableHeaderText, styles.colPcs]}>
+                    Pcs
+                  </Text>
+                  <Text style={[styles.tableHeaderText, styles.colAmount]}>
+                    Amount
+                  </Text>
+                </View>
+                {item.itemDetails.map((detail, index) => (
+                  <View key={index} style={styles.tableRow}>
+                    <Text
+                      style={[styles.tableCell, styles.colName]}
+                      numberOfLines={1}
+                    >
+                      {detail.name}
+                    </Text>
+                    <Text
+                      style={[styles.tableCell, styles.colCategory]}
+                      numberOfLines={1}
+                    >
+                      {detail.category}
+                    </Text>
+                    <Text style={[styles.tableCell, styles.colPrice]}>
+                      {detail.pricePerPiece}
+                    </Text>
+                    <Text style={[styles.tableCell, styles.colPcs]}>
+                      {detail.pieces}
+                    </Text>
+                    <Text style={[styles.tableCellBold, styles.colAmount]}>
+                      {detail.amount}
+                    </Text>
+                  </View>
+                ))}
+              </>
+            )}
             <TouchableOpacity
               style={styles.deleteRowBtn}
               onPress={() => handleMoveToTrash(item)}
@@ -542,7 +623,7 @@ export default function TransactionScreen() {
         >
           <ArrowLeft color={COLORS.white} size={24} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Transaction</Text>
+        <Text style={styles.headerTitle}>Transactions</Text>
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={styles.headerButton}
@@ -726,6 +807,31 @@ export default function TransactionScreen() {
           }}
         />
       </View>
+
+      <Modal
+        visible={Boolean(selectedReceiptImageUrl)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedReceiptImageUrl(null)}
+      >
+        <View style={styles.imageModalOverlay}>
+          <View style={styles.imageModalCard}>
+            <TouchableOpacity
+              style={styles.imageModalClose}
+              onPress={() => setSelectedReceiptImageUrl(null)}
+            >
+              <X size={20} color={COLORS.textDark} />
+            </TouchableOpacity>
+            {selectedReceiptImageUrl ? (
+              <Image
+                source={{ uri: selectedReceiptImageUrl }}
+                style={styles.imageModalPreview}
+                resizeMode="contain"
+              />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
 
       {/* Date Filter Modal */}
       <Modal
@@ -1031,19 +1137,112 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 15,
   },
-  chevronWrapper: {
-    paddingLeft: 8,
-    justifyContent: "center",
+  expandButton: {
+    paddingLeft: 10,
     alignItems: "center",
+    justifyContent: "center",
+  },
+  expandButtonText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+    marginBottom: 2,
   },
   expandedContainer: {
     paddingHorizontal: 15,
     paddingBottom: 15,
   },
+  expandedTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.textDark,
+    marginBottom: 10,
+  },
   expandedDivider: {
     height: 1,
     backgroundColor: "#e5e7eb",
     marginBottom: 12,
+  },
+  expenseSummaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  expenseSummaryCard: {
+    width: "48%",
+    backgroundColor: COLORS.lightBlueBg,
+    borderRadius: 10,
+    padding: 10,
+  },
+  summaryCardLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+    textTransform: "uppercase",
+    marginBottom: 4,
+  },
+  summaryCardValue: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.textDark,
+  },
+  receiptNoteCard: {
+    marginTop: 12,
+    borderRadius: 12,
+    backgroundColor: "#eef6ff",
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#d7e3f1",
+  },
+  receiptNoteTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  receiptNoteText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: COLORS.textDark,
+  },
+  receiptPreviewButton: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    backgroundColor: COLORS.primaryBlue,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  receiptPreviewButtonText: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  imageModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  imageModalCard: {
+    width: "100%",
+    maxWidth: 360,
+    maxHeight: "80%",
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    padding: 12,
+  },
+  imageModalClose: {
+    alignSelf: "flex-end",
+    padding: 4,
+  },
+  imageModalPreview: {
+    width: "100%",
+    height: 420,
+    borderRadius: 12,
+    backgroundColor: COLORS.lightBlueBg,
   },
   tableHeader: {
     flexDirection: "row",

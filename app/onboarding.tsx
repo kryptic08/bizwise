@@ -35,7 +35,7 @@ const slides: OnboardingSlide[] = [
     id: "1",
     image: require("../assets/images/ilustracion-3d-mano-dinero-blanco-removebg-preview 1.png"),
     title: "Welcome To\nBizWise",
-    subtitle: "Your smart expense manager for business success",
+    subtitle: "Your smart expenses tracker for business success",
   },
   {
     id: "2",

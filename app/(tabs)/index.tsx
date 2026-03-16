@@ -164,6 +164,31 @@ export default function HomeScreen() {
       : activeTab === "Weekly"
         ? dashboardData?.topCategoryMonthly
         : dashboardData?.topCategoryYearly;
+  const leastProduct =
+    activeTab === "Daily"
+      ? dashboardData?.leastProductWeekly
+      : activeTab === "Weekly"
+        ? dashboardData?.leastProductMonthly
+        : dashboardData?.leastProductYearly;
+  const leastCategory =
+    activeTab === "Daily"
+      ? dashboardData?.leastCategoryWeekly
+      : activeTab === "Weekly"
+        ? dashboardData?.leastCategoryMonthly
+        : dashboardData?.leastCategoryYearly;
+
+  const formatSellerName = (entry?: { name?: string }) => {
+    if (periodTotals.sales === 0 || !entry?.name) return "No sales yet";
+    const name = entry.name.toLowerCase();
+    if (
+      name.includes("add-on") ||
+      name.includes("takeout") ||
+      name.includes("fee")
+    ) {
+      return "No sales yet";
+    }
+    return toSentenceCase(entry.name);
+  };
 
   // Check target progress and trigger notifications
   useEffect(() => {
@@ -840,15 +865,7 @@ export default function HomeScreen() {
                       : "this year"}
                 </Text>
                 <Text style={styles.highlightValue}>
-                  {periodTotals.sales === 0
-                    ? "No sales yet"
-                    : topProduct?.name
-                      ? topProduct.name.toLowerCase().includes("add-on") ||
-                        topProduct.name.toLowerCase().includes("takeout") ||
-                        topProduct.name.toLowerCase().includes("fee")
-                        ? "No sales yet"
-                        : toSentenceCase(topProduct.name)
-                      : "No sales yet"}
+                  {formatSellerName(topProduct)}
                 </Text>
               </View>
             </View>
@@ -867,15 +884,51 @@ export default function HomeScreen() {
                       : "this year"}
                 </Text>
                 <Text style={styles.highlightValue}>
-                  {periodTotals.sales === 0
-                    ? "No sales yet"
-                    : topCategory?.name
-                      ? topCategory.name.toLowerCase().includes("add-on") ||
-                        topCategory.name.toLowerCase().includes("takeout") ||
-                        topCategory.name.toLowerCase().includes("fee")
-                        ? "No sales yet"
-                        : toSentenceCase(topCategory.name)
-                      : "No sales yet"}
+                  {formatSellerName(topCategory)}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={[styles.highlightCard, { marginTop: 10 }]}>
+            <View style={styles.highlightItem}>
+              <View style={styles.iconBoxBlue}>
+                <Utensils color={COLORS.white} size={16} />
+              </View>
+              <View>
+                <Text style={styles.highlightLabel}>Least selling product</Text>
+                <Text
+                  style={[styles.highlightPeriodLabel, { marginBottom: 2 }]}
+                >
+                  {activeTab === "Daily"
+                    ? "this week"
+                    : activeTab === "Weekly"
+                      ? "this month"
+                      : "this year"}
+                </Text>
+                <Text style={styles.highlightValue}>
+                  {formatSellerName(leastProduct)}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.highlightItem}>
+              <View style={styles.iconBoxBlue}>
+                <LayoutGrid color={COLORS.white} size={16} />
+              </View>
+              <View>
+                <Text style={styles.highlightLabel}>
+                  Least selling category
+                </Text>
+                <Text style={styles.highlightPeriodLabel}>
+                  {activeTab === "Daily"
+                    ? "this week"
+                    : activeTab === "Weekly"
+                      ? "this month"
+                      : "this year"}
+                </Text>
+                <Text style={styles.highlightValue}>
+                  {formatSellerName(leastCategory)}
                 </Text>
               </View>
             </View>
@@ -1281,7 +1334,7 @@ export default function HomeScreen() {
                   <View
                     style={[styles.legendDot, { backgroundColor: COLORS.red }]}
                   />
-                  <Text style={styles.legendText}>Expense</Text>
+                  <Text style={styles.legendText}>Expenses</Text>
                 </View>
               </View>
             </View>
@@ -1384,7 +1437,7 @@ export default function HomeScreen() {
                 <View style={styles.iconBoxRed}>
                   <ArrowDownRight color={COLORS.red} size={20} />
                 </View>
-                <Text style={styles.totalLabel}>Expense</Text>
+                <Text style={styles.totalLabel}>Expenses</Text>
                 <Text style={styles.totalValueRed}>
                   ₱
                   {periodTotals.expenses.toLocaleString("en-US", {

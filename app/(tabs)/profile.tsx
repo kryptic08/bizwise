@@ -30,6 +30,7 @@ import { useAuth } from "../context/AuthContext";
 import {
   generateMonthlyFinancialReportPDF,
   MonthlyExpenseItem,
+  MonthlyReportDashboardSummary,
   MonthlySaleItem,
 } from "../utils/pdfGenerator";
 
@@ -139,13 +140,21 @@ export default function ProfileScreen() {
           })),
       );
 
+      const dashboardSummary: MonthlyReportDashboardSummary = {
+        totalExpenseItems: monthlyReportData.totalExpenseItems,
+        totalExpenseAmount: monthlyReportData.expensesGrandTotal,
+        dailyChart: monthlyReportData.dailyChart,
+        weeklyChart: monthlyReportData.weeklyChart,
+      };
+
       await generateMonthlyFinancialReportPDF(
         user?.name || "Owner",
-        user?.businessName || user?.name || "My Business",
+        user?.name || "My Business",
         selectedMonth,
         selectedYear,
         sales,
         expenses,
+        dashboardSummary,
       );
     } catch (error) {
       console.error("Error generating PDF:", error);

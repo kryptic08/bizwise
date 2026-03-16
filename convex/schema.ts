@@ -9,7 +9,7 @@ export default defineSchema({
     name: v.string(),
     phone: v.optional(v.string()),
     pin: v.optional(v.string()), // 4-digit PIN for quick authentication
-    businessType: v.optional(v.string()), // Business type for dynamic categorization
+    businessType: v.optional(v.string()), // Legacy field kept temporarily for user data cleanup
     profilePictureStorageId: v.optional(v.id("_storage")), // Convex storage ID for profile picture
     profilePicture: v.optional(v.string()), // Legacy: URL or local URI (kept for backward compatibility)
     targetIncome: v.optional(
@@ -88,8 +88,11 @@ export default defineSchema({
     itemCount: v.number(), // Number of items in this expense
     date: v.string(),
     time: v.string(),
+    expenseCategory: v.optional(v.string()),
+    receiptNumber: v.optional(v.string()),
     receiptImageStorageId: v.optional(v.id("_storage")), // Convex storage ID for receipt image
     receiptImage: v.optional(v.string()), // Legacy: local URI (kept for backward compatibility)
+    receiptImageExpiresAt: v.optional(v.number()),
     ocrText: v.optional(v.string()),
     createdAt: v.number(),
     deletedAt: v.optional(v.number()), // Unix ms timestamp when moved to trash

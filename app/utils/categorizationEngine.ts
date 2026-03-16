@@ -1,17 +1,8 @@
 /**
- * Business-type-aware expense categorization engine.
- *
- * Different businesses classify the same item differently:
- *  - Chicken in a Food Business → Raw Materials (used to cook)
- *  - Chicken in a Meat Shop     → Merchandise Inventory (sold as-is)
- *
- * This module provides:
- *  1. Per-business-type category lists
- *  2. Keyword-based categorization with business context
- *  3. AI prompt context string injected into Gemini/OCR calls
+ * Expense categorization for the simplified receipt-summary workflow.
  */
 
-import { BusinessType } from "../context/AuthContext";
+type BusinessType = string;
 
 // ── Category definitions ────────────────────────────────────────────────────
 
@@ -20,140 +11,16 @@ export interface CategoryDefinition {
   description: string;
 }
 
-/**
- * Returns the ordered list of expense categories relevant to the given
- * business type.  "General" is always included as a fallback.
- */
+const RECEIPT_EXPENSE_CATEGORIES = [
+  "Store Supplies and Materials",
+  "Utilities",
+  "Transportation",
+] as const;
+
 export function getCategoriesForBusinessType(
-  businessType?: BusinessType | string | null,
+  _businessType?: string | null,
 ): string[] {
-  switch (businessType) {
-    case "Food Business":
-      return [
-        "Raw Materials",
-        "Packaging Materials",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "General",
-      ];
-
-    case "Printing Business":
-    case "Printing Services": // legacy alias
-      return [
-        "Raw Materials",
-        "Equipment",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "General",
-      ];
-
-    case "Laundry Shop":
-      return [
-        "Detergents & Chemicals",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Packaging Materials",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "General",
-      ];
-
-    case "Sari-sari Store":
-    case "Sari-Sari Store": // legacy alias
-      return [
-        "Merchandise Inventory",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "General",
-      ];
-
-    // Legacy types — kept so old accounts still categorize correctly
-    case "Meat Shop":
-      return [
-        "Merchandise Inventory",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Ice & Cold Storage",
-        "General",
-      ];
-
-    case "Construction":
-      return [
-        "Construction Materials",
-        "Equipment",
-        "Labor & Subcontracting",
-        "Transportation",
-        "Store Supplies",
-        "Utilities",
-        "Rent",
-        "Marketing & Advertising",
-        "Tools & Hardware",
-        "Safety Equipment",
-        "General",
-      ];
-
-    case "Retail":
-      return [
-        "Merchandise Inventory",
-        "Store Supplies",
-        "Packaging Materials",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "Security Services",
-        "General",
-      ];
-
-    default:
-      return [
-        "Raw Materials",
-        "Merchandise Inventory",
-        "Packaging Materials",
-        "Store Supplies",
-        "Utilities",
-        "Equipment",
-        "Transportation",
-        "Rent",
-        "Marketing & Advertising",
-        "Employee Wages",
-        "Maintenance & Repairs",
-        "General",
-      ];
-  }
+  return [...RECEIPT_EXPENSE_CATEGORIES];
 }
 
 // ── Keyword maps ────────────────────────────────────────────────────────────

@@ -87,40 +87,12 @@ const ICON_OPTIONS = [
   { name: "Phone", component: Phone },
 ];
 
-// Suggested categories based on business type
-const SUGGESTED_CATEGORIES: Record<
-  string,
-  { name: string; icon: string; color: string }[]
-> = {
-  "Food Business": [
-    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
-    { name: "Meals", icon: "Utensils", color: "#FF6B6B" },
-    { name: "Desserts", icon: "IceCream", color: "#FD79A8" },
-  ],
-  "Printing Business": [
-    { name: "Printing", icon: "Printer", color: "#FF6B6B" },
-    { name: "Supplies", icon: "Box", color: "#FDCB6E" },
-    { name: "Services", icon: "Briefcase", color: "#6C5CE7" },
-  ],
-  "Laundry Shop": [
-    { name: "Wash", icon: "RefreshCw", color: "#4ECDC4" },
-    { name: "Dry Clean", icon: "Sparkles", color: "#AA96DA" },
-    { name: "Supplies", icon: "Package", color: "#FF6B6B" },
-  ],
-  "Sari-sari Store": [
-    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
-    { name: "Sundries", icon: "ShoppingBag", color: "#FF6B6B" },
-    { name: "Canned Goods", icon: "Box", color: "#95E1D3" },
-  ],
-  default: [
-    { name: "Snacks", icon: "Cookie", color: "#FDCB6E" },
-    { name: "Drinks", icon: "Coffee", color: "#6C5CE7" },
-    { name: "Essentials", icon: "ShoppingBag", color: "#FF6B6B" },
-    { name: "Supplies", icon: "Package", color: "#4ECDC4" },
-  ],
-};
+const SUGGESTED_CATEGORIES = [
+  { name: "Products", icon: "ShoppingBag", color: "#4ECDC4" },
+  { name: "Services", icon: "Briefcase", color: "#6C5CE7" },
+  { name: "Supplies", icon: "Package", color: "#FF6B6B" },
+  { name: "Essentials", icon: "Box", color: "#FDCB6E" },
+];
 
 const COLOR_OPTIONS = [
   "#FF6B6B",
@@ -166,11 +138,11 @@ export default function ManageCategoriesScreen() {
   // Migrate default categories if none exist
   React.useEffect(() => {
     if (categories && categories.length === 0 && user?.userId) {
-      migrateDefaults({ userId: user.userId, businessType: user.businessType })
+      migrateDefaults({ userId: user.userId })
         .then(() => console.log("Default categories migrated"))
         .catch(console.error);
     }
-  }, [categories, user?.userId, user?.businessType]);
+  }, [categories, user?.userId]);
 
   const handleSaveCategory = async () => {
     if (!categoryName.trim()) {
@@ -425,18 +397,12 @@ export default function ManageCategoriesScreen() {
             </View>
 
             <ScrollView style={styles.modalBody}>
-              {/* Suggested Categories for Business Type */}
+              {/* Suggested Categories */}
               {!editingCategoryId && (
                 <>
-                  <Text style={styles.inputLabel}>
-                    Quick Add (Suggestions for{" "}
-                    {user?.businessType || "Your Business"})
-                  </Text>
+                  <Text style={styles.inputLabel}>Quick Add</Text>
                   <View style={styles.suggestedGrid}>
-                    {(
-                      SUGGESTED_CATEGORIES[user?.businessType || ""] ||
-                      SUGGESTED_CATEGORIES.default
-                    ).map((suggestion, index) => {
+                    {SUGGESTED_CATEGORIES.map((suggestion, index) => {
                       const IconComponent = getIconComponent(suggestion.icon);
                       return (
                         <TouchableOpacity
