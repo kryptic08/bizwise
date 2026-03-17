@@ -476,9 +476,11 @@ export default function TransactionScreen() {
                 </Text>
                 <View style={styles.expenseSummaryGrid}>
                   <View style={styles.expenseSummaryCard}>
-                    <Text style={styles.summaryCardLabel}>Receipt Number</Text>
+                    <Text style={styles.summaryCardLabel}>
+                      Receipt / Invoice No.
+                    </Text>
                     <Text style={styles.summaryCardValue}>
-                      {item.expenseSummary?.receiptNumber}
+                      {item.expenseSummary?.receiptNumber || "Not detected"}
                     </Text>
                   </View>
                   <View style={styles.expenseSummaryCard}>

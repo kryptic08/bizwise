@@ -125,8 +125,9 @@ const DRAFT_STORAGE_KEY = "bizwise_expenses_receipt_draft";
 
 interface ReceiptSummary {
   category: (typeof RECEIPT_CATEGORIES)[number];
-  totalItems: number;
-  totalAmount: number;
+  receiptNumber: string;
+  totalItems?: number;
+  totalAmount?: number;
 }
 
 function formatDateLabel(date: Date) {
@@ -167,7 +168,41 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
     try {
       return JSON.parse(normalized);
     } catch {
-      return null;
+      // Last attempt: repair common truncation cases such as missing quote/brace.
+      let repaired = normalized.trim();
+      const quoteCount = (repaired.match(/"/g) || []).length;
+      if (quoteCount % 2 !== 0) {
+        repaired += '"';
+      }
+      if (!repaired.endsWith("}")) {
+        repaired += "}";
+      }
+      repaired = repaired.replace(/,\s*([}\]])/g, "$1");
+
+      try {
+        return JSON.parse(repaired);
+      } catch {
+        // If there is no full JSON object, try a best-effort from first opening brace.
+        const firstBrace = cleaned.indexOf("{");
+        if (firstBrace === -1) {
+          return null;
+        }
+        let partial = cleaned.slice(firstBrace).trim();
+        const partialQuoteCount = (partial.match(/"/g) || []).length;
+        if (partialQuoteCount % 2 !== 0) {
+          partial += '"';
+        }
+        if (!partial.endsWith("}")) {
+          partial += "}";
+        }
+        partial = partial.replace(/,\s*([}\]])/g, "$1");
+
+        try {
+          return JSON.parse(partial);
+        } catch {
+          return null;
+        }
+      }
     }
   }
 }
@@ -192,6 +227,57 @@ function parseNumericValue(value: unknown): number | null {
 
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeReceiptNumber(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const raw = value.trim();
+  if (!raw) {
+    return "";
+  }
+
+  const upper = raw.toUpperCase();
+  const invalidValues = new Set([
+    "N/A",
+    "NA",
+    "NONE",
+    "NOT FOUND",
+    "NOT DETECTED",
+    "UNKNOWN",
+    "-",
+    "--",
+  ]);
+
+  if (invalidValues.has(upper)) {
+    return "";
+  }
+
+  return raw
+    .replace(
+      /^((RECEIPT|INVOICE|SALES\s*INVOICE|SI)\s*(NO\.?|NUMBER)?\s*[:#-]?\s*)/i,
+      "",
+    )
+    .trim();
+}
+
+function extractReceiptNumberFromText(text: string): string {
+  const patterns = [
+    /(?:sales\s*invoice|invoice|receipt)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{2,})/i,
+    /(?:\bSI\b)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{2,})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const normalized = normalizeReceiptNumber(match?.[1]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
 }
 
 function collectCandidateTexts(payload: unknown): string[] {
@@ -232,15 +318,40 @@ function normalizeReceiptSummary(
       payload.grandTotal ??
       payload.finalTotal,
   );
+  const receiptNumber = normalizeReceiptNumber(
+    payload.receiptNumber ??
+      payload.receiptNo ??
+      payload.receipt_number ??
+      payload.salesInvoiceNumber ??
+      payload.salesInvoiceNo ??
+      payload.salesInvoice ??
+      payload.sales_invoice_number ??
+      payload.invoiceNumber ??
+      payload.invoiceNo ??
+      payload.invoice_number ??
+      payload.referenceNumber ??
+      payload.referenceNo ??
+      payload.siNumber ??
+      payload.siNo,
+  );
 
-  if (totalItems === null || totalAmount === null) {
+  const hasAnySignal =
+    Boolean(normalizedCategory) ||
+    Boolean(receiptNumber) ||
+    totalItems !== null ||
+    totalAmount !== null;
+
+  if (!hasAnySignal) {
     return null;
   }
 
   return {
     category: normalizedCategory ?? DEFAULT_EXPENSE_CATEGORY,
-    totalItems: Math.max(1, Math.round(totalItems)),
-    totalAmount: Number(totalAmount.toFixed(2)),
+    receiptNumber,
+    totalItems:
+      totalItems !== null ? Math.max(1, Math.round(totalItems)) : undefined,
+    totalAmount:
+      totalAmount !== null ? Number(totalAmount.toFixed(2)) : undefined,
   };
 }
 
@@ -366,12 +477,16 @@ export default function AddExpenseScreen() {
 Required JSON shape:
 {
   "category": "${RECEIPT_CATEGORIES[0]} | ${RECEIPT_CATEGORIES[1]} | ${RECEIPT_CATEGORIES[2]}",
+  "receiptNumber": "",
   "totalItems": 0,
   "totalAmount": 0
 }
 
 Rules:
 - category must be exactly one of the allowed categories in the JSON shape.
+- receiptNumber should contain the receipt number or sales invoice number exactly as printed on the receipt.
+- If both are present, prefer sales invoice number.
+- If no receipt or invoice reference is visible, return an empty string for receiptNumber.
 - Use "Utilities" for utility, telecom, internet, water, electricity, or gas bills.
 - Use "Transportation" for fares, fuel, tolls, delivery, shipping, or logistics expenses.
 - Use "Store Supplies and Materials" for every other business purchase.
@@ -385,6 +500,8 @@ Rules:
     const orderedApiKeys = rotateFromCursor(GEMINI_API_KEYS, geminiKeyCursor);
     const totalAttempts = orderedModels.length * orderedApiKeys.length;
     let attempt = 0;
+    let bestPartialSummary: ReceiptSummary | null = null;
+    let bestPartialRawText = "";
 
     for (const [modelOffset, model] of orderedModels.entries()) {
       const modelIndex =
@@ -450,6 +567,30 @@ Rules:
             const summary = parsed ? normalizeReceiptSummary(parsed) : null;
 
             if (summary) {
+              const fallbackReceiptNumber =
+                extractReceiptNumberFromText(rawText);
+              const normalizedSummary: ReceiptSummary = {
+                ...summary,
+                receiptNumber: summary.receiptNumber || fallbackReceiptNumber,
+              };
+
+              const hasCompleteTotals =
+                typeof normalizedSummary.totalItems === "number" &&
+                typeof normalizedSummary.totalAmount === "number";
+
+              if (!hasCompleteTotals) {
+                const shouldReplaceBestPartial =
+                  !bestPartialSummary ||
+                  (normalizedSummary.receiptNumber.length > 0 &&
+                    !bestPartialSummary.receiptNumber);
+
+                if (shouldReplaceBestPartial) {
+                  bestPartialSummary = normalizedSummary;
+                  bestPartialRawText = rawText;
+                }
+                continue;
+              }
+
               geminiModelCursor = (modelIndex + 1) % GEMINI_MODELS.length;
               geminiKeyCursor = (keyIndex + 1) % GEMINI_API_KEYS.length;
               geminiLog(
@@ -458,7 +599,7 @@ Rules:
                 `Next key cursor=${geminiKeyCursor}, model cursor=${geminiModelCursor}`,
               );
               return {
-                summary,
+                summary: normalizedSummary,
                 rawText,
               };
             }
@@ -483,6 +624,19 @@ Rules:
 
     geminiModelCursor = (geminiModelCursor + 1) % GEMINI_MODELS.length;
     geminiKeyCursor = (geminiKeyCursor + 1) % GEMINI_API_KEYS.length;
+
+    if (bestPartialSummary) {
+      geminiLog(
+        "warn",
+        "Returning partial receipt summary (missing totals).",
+        bestPartialRawText.slice(0, 240),
+      );
+      return {
+        summary: bestPartialSummary,
+        rawText: bestPartialRawText,
+      };
+    }
+
     geminiLog(
       "error",
       `All ${totalAttempts} Gemini attempts failed.`,
@@ -512,6 +666,16 @@ Rules:
       const { summary } = await parseReceiptWithGemini(processedImage.uri);
       setCapturedImage(processedImage.uri);
       setReceiptSummary(summary);
+
+      if (
+        typeof summary.totalItems !== "number" ||
+        typeof summary.totalAmount !== "number"
+      ) {
+        Alert.alert(
+          "Partial Scan",
+          "BizWise detected a receipt/invoice number but could not reliably detect totals yet. Please retake the photo for a complete scan.",
+        );
+      }
     } catch (error) {
       console.error("Error scanning receipt:", error);
       Alert.alert(
@@ -581,13 +745,22 @@ Rules:
       return;
     }
 
-    if (!capturedImage || !receiptSummary) {
+    if (
+      !capturedImage ||
+      !receiptSummary ||
+      typeof receiptSummary.totalItems !== "number" ||
+      typeof receiptSummary.totalAmount !== "number"
+    ) {
       Alert.alert(
         "Scan Required",
-        "Scan a receipt first before saving expenses.",
+        "Scan a receipt first and make sure totals are detected before saving expenses.",
       );
       return;
     }
+
+    const imageUri = capturedImage;
+    const itemCount = receiptSummary.totalItems;
+    const totalAmount = receiptSummary.totalAmount;
 
     if (!isOnline) {
       Alert.alert(
@@ -599,13 +772,13 @@ Rules:
 
     setIsSaving(true);
     try {
-      const receiptImageStorageId = await uploadReceiptImage(capturedImage);
+      const receiptImageStorageId = await uploadReceiptImage(imageUri);
       const result = await createExpense({
         userId: user.userId,
         category: receiptSummary.category,
-        receiptNumber: "",
-        itemCount: receiptSummary.totalItems,
-        totalAmount: receiptSummary.totalAmount,
+        receiptNumber: receiptSummary.receiptNumber || "",
+        itemCount,
+        totalAmount,
         receiptImageStorageId,
         expenseDate: buildExpenseDate(selectedDate),
         clientTimestamp: Date.now(),
@@ -645,7 +818,7 @@ Rules:
         <View style={styles.headerButton}>
           <HelpTooltip
             title="Add Expenses Help"
-            content="Manual expense entry is disabled. Scan a receipt or choose a receipt photo, then review the scanned category, total item count, and total amount before saving."
+            content="Manual expense entry is disabled. Scan a receipt or choose a receipt photo, then review the detected receipt or invoice number, category, total item count, and total amount before saving."
             iconSize={18}
             iconColor={COLORS.primaryBlue}
           />
@@ -677,7 +850,9 @@ Rules:
 
         <View style={styles.summaryPanel}>
           <Text style={styles.receiptNumberText}>
-            Receipt No. To be generated after save
+            {receiptSummary?.receiptNumber
+              ? `Receipt No. / Sales Invoice No.: ${receiptSummary.receiptNumber}`
+              : "Receipt No. / Sales Invoice No. Not Detected Yet"}
           </Text>
 
           <Text style={styles.inputLabel}>Category</Text>
@@ -729,11 +904,21 @@ Rules:
         <TouchableOpacity
           style={[
             styles.saveButton,
-            (!receiptSummary || isSaving || isScanning) &&
+            (!receiptSummary ||
+              typeof receiptSummary.totalItems !== "number" ||
+              typeof receiptSummary.totalAmount !== "number" ||
+              isSaving ||
+              isScanning) &&
               styles.saveButtonDisabled,
           ]}
           onPress={handleSave}
-          disabled={!receiptSummary || isSaving || isScanning}
+          disabled={
+            !receiptSummary ||
+            typeof receiptSummary.totalItems !== "number" ||
+            typeof receiptSummary.totalAmount !== "number" ||
+            isSaving ||
+            isScanning
+          }
         >
           {isSaving ? (
             <ActivityIndicator color={COLORS.white} />
